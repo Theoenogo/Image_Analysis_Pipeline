@@ -1,12 +1,23 @@
 """Consolidate per-sample ``Decon/`` folders — port of MATLAB E.
 
-After :mod:`stacking`, each per-sample folder contains a ``Decon/`` child
-holding that sample's stacked ``gfp/`` and ``cy/`` outputs. This step
-pulls every sample's ``Decon`` up to a single ``<main_folder>/Decon/``,
-renaming each one to the originating sample folder's name so the final
-structure is ``<main_folder>/Decon/<sample>/{gfp,cy}/<name>.tif``.
+After :mod:`stacking`, each folder containing channel subfolders has a
+``Decon/`` child holding that sample's stacked ``gfp/`` and ``cy/``
+outputs. This step pulls every such ``Decon`` up to a single
+``<main_folder>/Decon/``, flattening arbitrary intermediate nesting.
 
-Matches the behavior of ``E_move_decon_folders.m``.
+For a layout like::
+
+    <main>/experiment1/replicate1/sampleA/Decon/
+
+the result is::
+
+    <main>/Decon/experiment1__replicate1__sampleA/
+
+For the simple 2-level layout (``<main>/sampleA/Decon/``) the flat name
+is just ``sampleA`` — the original MATLAB behavior.
+
+Matches the behavior of ``E_move_decon_folders.m`` but tolerates
+arbitrary depth.
 """
 
 from __future__ import annotations
@@ -18,8 +29,25 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 
+_FLAT_SEP = "__"
+
+
+def _flatten_sample_name(sample_path: Path, main_folder: Path) -> str:
+    """Turn a relative path into a flat, filesystem-safe sample identifier.
+
+    ``<main>/expA/repA/sampleA`` -> ``"expA__repA__sampleA"``
+    ``<main>/sampleA``           -> ``"sampleA"`` (unchanged for flat layouts)
+    """
+    rel = sample_path.relative_to(main_folder)
+    return _FLAT_SEP.join(rel.parts)
+
+
 def consolidate_decon_folders(main_folder: Path) -> list[Path]:
-    """Move every ``<sample>/Decon/`` into ``<main_folder>/Decon/<sample>/``.
+    """Move every intermediate ``Decon/`` under ``main_folder`` into ``<main>/Decon/<flat_sample>/``.
+
+    Walks the tree, finds every ``Decon`` directory (except the top-level
+    ``<main>/Decon`` itself), computes a flattened sample name from the
+    parent path, and moves the folder accordingly.
 
     Returns the list of newly-created consolidated sample folders.
     """
@@ -30,15 +58,28 @@ def consolidate_decon_folders(main_folder: Path) -> list[Path]:
     top_decon = main_folder / "Decon"
     top_decon.mkdir(exist_ok=True)
 
-    moved: list[Path] = []
-    for sample_dir in sorted(p for p in main_folder.iterdir() if p.is_dir()):
-        if sample_dir.name == "Decon":
+    # Collect candidates first; deepest-first so we don't walk into folders
+    # we're about to move.
+    candidates: list[Path] = []
+    for path in main_folder.rglob("Decon"):
+        if not path.is_dir():
             continue
-        sample_decon = sample_dir / "Decon"
-        if not sample_decon.is_dir():
+        if path == top_decon:
             continue
+        # Skip anything already under the output tree.
+        try:
+            path.relative_to(top_decon)
+            continue
+        except ValueError:
+            pass
+        candidates.append(path)
 
-        destination = top_decon / sample_dir.name
+    moved: list[Path] = []
+    for sample_decon in sorted(candidates, key=lambda p: len(p.parts), reverse=True):
+        sample_parent = sample_decon.parent
+        flat_name = _flatten_sample_name(sample_parent, main_folder)
+
+        destination = top_decon / flat_name
         if destination.exists():
             log.warning(
                 "Cannot consolidate %s: %s already exists", sample_decon, destination,

@@ -25,12 +25,12 @@ _CHANNEL_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 
 def rename_channel_folders(main_folder: Path) -> int:
-    """Strip the ``.<tail>`` suffix from channel folders one level down.
+    """Strip the ``.<tail>`` suffix from channel folders anywhere in the tree.
 
-    Matches the MATLAB behavior: walks each first-level subdirectory of
-    ``main_folder`` (the per-sample folders) and renames any child folder
-    that matches ``gfp\\d+.<tail>``, ``cy\\d+.<tail>``, or ``rfp\\d+.<tail>``
-    to just the part before the dot.
+    Walks the entire directory tree under ``main_folder`` and renames any
+    folder whose name matches ``gfp\\d+.<tail>``, ``cy\\d+.<tail>``, or
+    ``rfp\\d+.<tail>`` to just the part before the dot. This tolerates
+    arbitrary nesting (e.g. ``<main>/experiment/replicate/sample/gfp1.abc123``).
 
     Returns the number of folders renamed.
     """
@@ -38,21 +38,27 @@ def rename_channel_folders(main_folder: Path) -> int:
     if not main_folder.is_dir():
         raise NotADirectoryError(main_folder)
 
+    # Walk bottom-up so renames don't invalidate paths we still need to visit.
+    to_rename: list[Path] = []
+    for path in main_folder.rglob("*"):
+        if not path.is_dir():
+            continue
+        if any(p.match(path.name) for p in _CHANNEL_PATTERNS):
+            to_rename.append(path)
+
     renamed = 0
-    for sample_dir in sorted(p for p in main_folder.iterdir() if p.is_dir()):
-        for child in sorted(p for p in sample_dir.iterdir() if p.is_dir()):
-            if any(p.match(child.name) for p in _CHANNEL_PATTERNS):
-                new_name = child.name.split(".", 1)[0]
-                target = sample_dir / new_name
-                if target.exists():
-                    log.warning(
-                        "Cannot rename %s -> %s: target already exists",
-                        child, target,
-                    )
-                    continue
-                child.rename(target)
-                renamed += 1
-                log.info("Renamed %s -> %s", child, target)
+    for path in sorted(to_rename, key=lambda p: len(p.parts), reverse=True):
+        new_name = path.name.split(".", 1)[0]
+        target = path.parent / new_name
+        if target.exists():
+            log.warning(
+                "Cannot rename %s -> %s: target already exists",
+                path, target,
+            )
+            continue
+        path.rename(target)
+        renamed += 1
+        log.info("Renamed %s -> %s", path, target)
     return renamed
 
 

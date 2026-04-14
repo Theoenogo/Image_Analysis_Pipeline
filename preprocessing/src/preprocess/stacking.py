@@ -137,17 +137,22 @@ def stack_channel_folders(
     decon_group: str,
     xy_offset: tuple[int, int] | None = None,
 ) -> list[Path]:
-    """Stack every ``<channel_prefix>*`` folder found one level below ``main_folder``.
+    """Stack every ``<channel_prefix>*`` folder found anywhere under ``main_folder``.
 
-    Mirrors the MATLAB behavior: walks each first-level subdirectory of
-    ``main_folder`` (the per-sample folders), and within each, stacks every
-    subfolder whose name starts with ``channel_prefix`` (case-insensitive).
-    Results are placed in ``<sample>/Decon/<decon_group>/<folder_name>.tif``.
+    Walks the entire directory tree and stacks every folder whose name starts
+    with ``channel_prefix`` (case-insensitive). This tolerates arbitrary
+    nesting (e.g. ``<main>/experiment/replicate/sample/gfp1/``). Folders
+    under any existing ``<main>/Decon/`` subtree are skipped so re-runs
+    don't re-ingest their own output.
+
+    Output is written next to the sample (i.e. as a sibling of the channel
+    folder under ``<sample>/Decon/<decon_group>/<folder_name>.tif``), which
+    the consolidate step later moves up to ``<main>/Decon/``.
 
     Parameters
     ----------
     main_folder
-        The top-level folder containing per-sample subdirectories.
+        The top-level folder to walk.
     channel_prefix
         Case-insensitive folder-name prefix to match (e.g. ``"gfp"``, ``"cy"``).
     decon_group
@@ -164,15 +169,28 @@ def stack_channel_folders(
         raise NotADirectoryError(main_folder)
 
     prefix = channel_prefix.lower()
+    top_decon = main_folder / "Decon"
     outputs: list[Path] = []
 
-    for sample_dir in sorted(p for p in main_folder.iterdir() if p.is_dir()):
-        if sample_dir.name == "Decon":
+    channel_folders: list[Path] = []
+    for path in main_folder.rglob("*"):
+        if not path.is_dir():
             continue
-        for channel_folder in sorted(p for p in sample_dir.iterdir() if p.is_dir()):
-            if channel_folder.name.lower().startswith(prefix):
-                out = _process_channel_folder(channel_folder, decon_group, xy_offset)
-                if out is not None:
-                    outputs.append(out)
+        # Skip anything under the top-level <main>/Decon/ output tree.
+        try:
+            path.relative_to(top_decon)
+            continue
+        except ValueError:
+            pass
+        # Skip per-sample intermediate Decon/ folders we may have already created.
+        if "Decon" in path.parts[len(main_folder.parts):]:
+            continue
+        if path.name.lower().startswith(prefix):
+            channel_folders.append(path)
+
+    for channel_folder in sorted(channel_folders):
+        out = _process_channel_folder(channel_folder, decon_group, xy_offset)
+        if out is not None:
+            outputs.append(out)
 
     return outputs

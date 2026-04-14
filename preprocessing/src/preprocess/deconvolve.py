@@ -238,37 +238,61 @@ def deconvolve_channel(
     target_dir = decon_folder / "Deconvoluted" / channel_group
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    outputs: list[Path] = []
-    # Find every folder literally named channel_group anywhere under decon_folder
-    # (excluding the Deconvoluted output tree itself).
+    # First pass: collect every stack that would be deconvolved and check for
+    # flat-output filename collisions across samples (which can happen when
+    # nested sample folders share channel-folder names like "gfp1").
+    stacks_to_process: list[Path] = []
+    seen_output_names: dict[str, Path] = {}
+    collisions: list[tuple[Path, Path]] = []
     for channel_dir in sorted(decon_folder.rglob(channel_group)):
         if not channel_dir.is_dir():
             continue
         if (decon_folder / "Deconvoluted") in channel_dir.parents:
             continue
-
         for stack_path in sorted(channel_dir.glob("*.tif")):
             if stack_path.name.endswith("_decon.tif"):
                 continue
-            log.info("Deconvolving %s", stack_path)
-            image = _load_tiff_stack(stack_path)
-            if image.ndim != psf.ndim:
-                # Broadcast PSF to image dim (e.g. 2D PSF vs 3D image) — unusual,
-                # but bail loudly rather than silently misbehaving.
-                raise ValueError(
-                    f"Dimension mismatch: image {image.shape} vs PSF {psf.shape}. "
-                    "Both must have the same number of axes."
-                )
-            result = richardson_lucy(
-                image, psf,
-                num_iter=config.num_iter,
-                backend=config.backend,
-                torch_device=config.torch_device,
-            )
             output_name = f"{stack_path.stem}_decon.tif"
-            final_path = target_dir / output_name
-            _save_uint16_stack(final_path, result)
-            outputs.append(final_path)
-            log.info("Wrote %s", final_path)
+            if output_name in seen_output_names:
+                collisions.append((seen_output_names[output_name], stack_path))
+            else:
+                seen_output_names[output_name] = stack_path
+            stacks_to_process.append(stack_path)
+
+    if collisions:
+        collision_detail = "\n".join(
+            f"  - {a}\n    collides with {b}" for a, b in collisions
+        )
+        raise ValueError(
+            f"Flat output layout would overwrite {len(collisions)} "
+            f"file(s) in Deconvoluted/{channel_group}/ because multiple "
+            "samples produced stacks with the same name. "
+            "Rename channel folders so each has a unique name across the "
+            f"whole experiment (e.g. gfp1, gfp2, ...), or keep your data "
+            "in a flat 2-level layout.\n\nCollisions:\n"
+            f"{collision_detail}"
+        )
+
+    outputs: list[Path] = []
+    for stack_path in stacks_to_process:
+        log.info("Deconvolving %s", stack_path)
+        image = _load_tiff_stack(stack_path)
+        if image.ndim != psf.ndim:
+            # Bail loudly rather than silently misbehaving.
+            raise ValueError(
+                f"Dimension mismatch: image {image.shape} vs PSF {psf.shape}. "
+                "Both must have the same number of axes."
+            )
+        result = richardson_lucy(
+            image, psf,
+            num_iter=config.num_iter,
+            backend=config.backend,
+            torch_device=config.torch_device,
+        )
+        output_name = f"{stack_path.stem}_decon.tif"
+        final_path = target_dir / output_name
+        _save_uint16_stack(final_path, result)
+        outputs.append(final_path)
+        log.info("Wrote %s", final_path)
 
     return outputs

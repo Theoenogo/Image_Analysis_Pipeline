@@ -30,6 +30,8 @@ The `Deconvoluted/` tree is what `roi_drawing/` reads from next.
 
 ## Input layout
 
+The simple 2-level layout (mirrors the MATLAB pipeline):
+
 ```
 <input-dir>/
     sampleA/
@@ -45,6 +47,48 @@ The `Deconvoluted/` tree is what `roi_drawing/` reads from next.
 
 Folders can be named with or without the post-dot suffix (`gfp1` or
 `gfp1.abc123`) — the cleanup step normalizes them.
+
+### Nested / deeper layouts
+
+Any depth of nesting is supported. All stages walk the tree
+recursively and find sample folders wherever they live. For example:
+
+```
+<input-dir>/
+    experiment1/
+        replicate1/
+            sampleA/
+                gfp1/
+                cy1/
+            sampleB/
+                gfp2/
+                cy2/
+        replicate2/
+            sampleC/
+                gfp3/
+                cy3/
+    experiment2/
+        sampleD/
+            gfp4/
+            cy4/
+```
+
+When there are intermediate group/replicate folders, the consolidate
+step flattens the sample path into the consolidated folder name using
+``__`` as the separator. E.g. the sample at
+``<input-dir>/experiment1/replicate1/sampleA`` becomes
+``<input-dir>/Decon/experiment1__replicate1__sampleA/``. For the flat
+2-level layout the consolidated name is just the sample folder name
+(``sampleA``), unchanged from the MATLAB behavior.
+
+**Important — channel folder names must be unique across the whole
+experiment.** The final ``Deconvoluted/gfp/*.tif`` and
+``Deconvoluted/cy/*.tif`` are flat folders, so two samples with a
+channel folder both named ``gfp1`` would overwrite each other. The
+pipeline detects this up front and errors out with a list of the
+conflicting paths before any deconvolution work is done; rename the
+colliding channel folders (e.g. ``gfp1``, ``gfp2``, ``gfp3`` ...
+across the whole experiment) and re-run.
 
 ## Output layout
 
