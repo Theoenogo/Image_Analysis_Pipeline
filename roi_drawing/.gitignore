@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+.DS_Store
+
+# Outputs from running roi_detect.py
+roi_results/
+*_rois.zip
+*_masks.tif
+*_overlay.png
+*_measurements.csv

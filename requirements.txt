@@ -1,0 +1,7 @@
+cellpose>=3.0
+numpy
+tifffile
+scikit-image
+roifile
+matplotlib
+tqdm
