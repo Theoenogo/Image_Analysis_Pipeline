@@ -10,7 +10,7 @@ Tools should be run in the following order:
 
 | Step | Folder | Description |
 |------|--------|-------------|
-| 1 | *(coming soon)* | Pre-processing / image preparation |
+| 1 | `preprocessing/` | Stack microscope TIFF slices, correct GFP XY offset, Richardson-Lucy deconvolution |
 | 2 | `roi_drawing/` | Automated ROI detection around cells using Cellpose |
 | 3 | *(coming soon)* | Intermediate processing |
 | 4 | `manders_mcc/` | Colocalization analysis (Manders' coefficients + Pearson's) |
@@ -48,6 +48,26 @@ python3.12 -m pip install -r requirements.txt
 ---
 
 ## Tools
+
+### Preprocessing (`preprocessing/`)
+
+Stacks per-slice microscope TIFFs into multi-page stacks, applies a
+fixed XY offset to the GFP channel to correct for channel registration,
+and runs Richardson-Lucy deconvolution against user-supplied PSFs.
+This is the Python port of the original MATLAB preprocessing pipeline.
+
+**Run:**
+```bash
+cd preprocessing
+python preprocess.py \
+    --input-dir /path/to/main_folder \
+    --gfp-psf /path/to/gfp_psf.tif \
+    --cy-psf /path/to/cy_psf.tif
+```
+
+See `preprocessing/README.md` for full usage and options.
+
+---
 
 ### ROI Drawing (`roi_drawing/`)
 
