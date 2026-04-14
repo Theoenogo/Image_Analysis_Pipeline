@@ -24,8 +24,13 @@ Output files per image pair:
 
 - `<stem>_rois.zip` — ImageJ ROI set with all kept cells (open in
   Fiji's ROI Manager).
-- `roi/<NN>.zip` — numbered copy of the ROI zip in a shared `roi/`
-  folder: `01.zip` for image pair 1, `02.zip` for pair 2, etc.
+- `roi_original/<NN>.zip` — numbered copy of the ROI zip in a shared
+  `roi_original/` folder: `01.zip` for image pair 1, `02.zip` for pair 2,
+  etc. The next pipeline stage expects a user-edited sibling folder
+  named `roi/` (produced by the ImageJ
+  `Color_Merge_Automated_PreloadROIs_Adjust` macro — run manually to
+  add/remove/refine ROIs), so keeping the automated output under
+  `roi_original/` preserves it verbatim.
 - `<stem>_masks.tif` — labeled mask of kept cells only.
 - `<stem>_overlay.png` — 3-panel QC figure (GFP / Cy5 / merged with ROIs).
 - `<stem>_measurements.csv` — per-cell intensities (mean, top-percentile,

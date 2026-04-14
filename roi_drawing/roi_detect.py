@@ -177,8 +177,8 @@ def process_pair(
     """Run the full pipeline on one image pair. Returns a summary dict.
 
     If ``pair_index`` is given, the ROI zip is also saved as
-    ``<roi_dir>/roi/<NN>.zip``. ``roi_dir`` defaults to ``output_dir``
-    if not specified.
+    ``<roi_dir>/roi_original/<NN>.zip``. ``roi_dir`` defaults to
+    ``output_dir`` if not specified.
     """
     from roi_detect.segment import preprocess_composite
 
@@ -224,10 +224,13 @@ def process_pair(
     io.save_masks(mask_path, kept_mask)
     io.save_overlay(overlay_path, gfp, cy5, masks, kept_labels)
 
-    # Save a numbered copy in the shared roi/ folder.
+    # Save a numbered copy in the shared roi_original/ folder. This is the
+    # untouched automated output; the user edits it in the ImageJ
+    # Color_Merge macro and writes the edited version to a sibling roi/
+    # folder, which the next pipeline stage (roi_cropping) reads from.
     if pair_index is not None:
         roi_base = roi_dir if roi_dir is not None else output_dir
-        roi_folder = roi_base / "roi"
+        roi_folder = roi_base / "roi_original"
         roi_folder.mkdir(parents=True, exist_ok=True)
         numbered_path = roi_folder / f"{pair_index:02d}.zip"
         io.save_roi_zip(numbered_path, masks, sorted(kept_labels))
@@ -293,7 +296,7 @@ def run_batch(
     if output_dir is None:
         output_dir = folder / "roi_results"
     print(f"\nWriting results to: {output_dir}")
-    print(f"ROI zips will be in: {folder / 'roi'}")
+    print(f"ROI zips will be in: {folder / 'roi_original'}")
 
     try:
         from tqdm import tqdm

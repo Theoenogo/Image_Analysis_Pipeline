@@ -11,9 +11,11 @@ Tools should be run in the following order:
 | Step | Folder | Description |
 |------|--------|-------------|
 | 1 | `preprocessing/` | Stack microscope TIFF slices, correct GFP XY offset, Richardson-Lucy deconvolution |
-| 2 | `roi_drawing/` | Automated ROI detection around cells using Cellpose |
-| 3 | *(coming soon)* | Intermediate processing |
-| 4 | `manders_mcc/` | Colocalization analysis (Manders' coefficients + Pearson's) |
+| 2 | `roi_drawing/` | Automated ROI detection around cells using Cellpose (writes to `roi_original/`) |
+| 3 | *(manual)* ImageJ `Color_Merge_Automated_PreloadROIs_Adjust.ijm` | User refines ROIs and saves the edited set to `roi/` |
+| 4 | `roi_cropping/` *(scaffold; implementation pending)* | Crop each ROI's single-cell stack and re-origin the ROI coords |
+| 5 | `background_subtraction/` *(scaffold; implementation pending)* | Per-cell background subtraction |
+| 6 | `manders_mcc/` | Colocalization analysis (Manders' coefficients + Pearson's) |
 
 ---
 
