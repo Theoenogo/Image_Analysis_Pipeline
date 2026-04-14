@@ -31,11 +31,13 @@ Output layout produced (matches the original MATLAB pipeline)::
                 cy/cy1.tif        ← stacked, no shift
             sampleB/...
             Deconvoluted/
-                gfp/gfp1_decon.tif
-                cy/cy1_decon.tif
-                ...
+                sampleA/
+                    gfp/gfp1_decon.tif
+                    cy/cy1_decon.tif
+                sampleB/...
 
-The ``Deconvoluted/`` tree is what ``roi_drawing/`` reads from next.
+Point ``roi_drawing/`` at each ``Deconvoluted/<sample>/`` folder to run
+ROI detection on that sample's paired gfp/cy stacks.
 """
 
 from __future__ import annotations

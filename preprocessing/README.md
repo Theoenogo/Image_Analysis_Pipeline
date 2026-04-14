@@ -12,8 +12,9 @@ The original MATLAB scripts are preserved for reference in
 
 In a single command, this replaces MATLAB scripts A → F:
 
-1. **Cleanup** — renames scope-output folders like `gfp1.abc123` to `gfp1`,
-   and recursively deletes `*.scanprotocol` sidecar files.
+1. **Cleanup** — renames scope-output folders like `gfp1.abc123` or
+   `gfp2.2026-04-10-16-34-59` to just `gfp1` / `gfp2`, and recursively
+   deletes `*.scanprotocol` sidecar files.
 2. **Stack + GFP XY offset** — for every `gfp*` folder under each sample,
    reads all single-page TIFFs, applies a fixed `(+5, −2)` pixel shift to
    correct chromatic registration, and writes a multi-page uint16 TIFF
@@ -24,7 +25,7 @@ In a single command, this replaces MATLAB scripts A → F:
    tree.
 5. **Richardson-Lucy deconvolution** — 30 iterations (matching the MATLAB
    pipeline's `DL2.RL(..., 30)`) against user-supplied PSF TIFFs, saved
-   into `<input-dir>/Decon/Deconvoluted/{gfp,cy}/<name>_decon.tif`.
+   into `<input-dir>/Decon/Deconvoluted/<sample>/{gfp,cy}/<name>_decon.tif`.
 
 The `Deconvoluted/` tree is what `roi_drawing/` reads from next.
 
@@ -45,8 +46,9 @@ The simple 2-level layout (mirrors the MATLAB pipeline):
     ...
 ```
 
-Folders can be named with or without the post-dot suffix (`gfp1` or
-`gfp1.abc123`) — the cleanup step normalizes them.
+Folders can be named with or without the post-dot suffix (`gfp1`,
+`gfp1.abc123`, or `gfp2.2026-04-10-16-34-59`) — the cleanup step
+normalizes them all to just `gfp1`, `gfp2`, etc.
 
 ### Nested / deeper layouts
 
@@ -81,14 +83,10 @@ step flattens the sample path into the consolidated folder name using
 2-level layout the consolidated name is just the sample folder name
 (``sampleA``), unchanged from the MATLAB behavior.
 
-**Important — channel folder names must be unique across the whole
-experiment.** The final ``Deconvoluted/gfp/*.tif`` and
-``Deconvoluted/cy/*.tif`` are flat folders, so two samples with a
-channel folder both named ``gfp1`` would overwrite each other. The
-pipeline detects this up front and errors out with a list of the
-conflicting paths before any deconvolution work is done; rename the
-colliding channel folders (e.g. ``gfp1``, ``gfp2``, ``gfp3`` ...
-across the whole experiment) and re-run.
+Because the deconvolution step writes per-sample output
+(``Deconvoluted/<sample>/{gfp,cy}/...``), channel folder names do
+*not* need to be unique across the whole experiment — two samples
+can each have a ``gfp1`` folder without collision.
 
 ## Output layout
 
@@ -104,12 +102,12 @@ After a full run:
             gfp/gfp2.tif
             cy/cy2.tif
         Deconvoluted/
-            gfp/
-                gfp1_decon.tif  ← Richardson-Lucy output, uint16
-                gfp2_decon.tif
-            cy/
-                cy1_decon.tif
-                cy2_decon.tif
+            sampleA/
+                gfp/gfp1_decon.tif  ← Richardson-Lucy output, uint16
+                cy/cy1_decon.tif
+            sampleB/
+                gfp/gfp2_decon.tif
+                cy/cy2_decon.tif
 ```
 
 ## Install

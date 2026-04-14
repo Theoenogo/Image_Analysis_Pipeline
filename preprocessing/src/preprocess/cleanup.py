@@ -16,11 +16,13 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 # The MATLAB regexes were 'gfp\d+\.[\dA-Za-z]+' etc. — match channel prefix
-# followed by digits, a dot, then any alphanumeric tail.
+# followed by digits, a dot, then any alphanumeric tail. We also accept
+# dashes and underscores in the tail so datetime-stamped folders like
+# ``gfp2.2026-04-10-16-34-59`` are recognised and stripped.
 _CHANNEL_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"^gfp\d+\.[\dA-Za-z]+$", re.IGNORECASE),
-    re.compile(r"^cy\d+\.[\dA-Za-z]+$", re.IGNORECASE),
-    re.compile(r"^rfp\d+\.[\dA-Za-z]+$", re.IGNORECASE),
+    re.compile(r"^gfp\d+\.[\dA-Za-z_-]+$", re.IGNORECASE),
+    re.compile(r"^cy\d+\.[\dA-Za-z_-]+$", re.IGNORECASE),
+    re.compile(r"^rfp\d+\.[\dA-Za-z_-]+$", re.IGNORECASE),
 )
 
 
