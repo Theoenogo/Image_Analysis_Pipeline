@@ -39,7 +39,7 @@ TorchDevice = Literal["cpu", "mps", "cuda"]
 @dataclass
 class DeconvolutionConfig:
     num_iter: int = 30
-    engine: Engine = "dl2"
+    engine: Engine = "scipy"
     torch_device: TorchDevice = "mps"
     fiji_dir: Optional[Path] = None  # only used when engine == "dl2"
 
