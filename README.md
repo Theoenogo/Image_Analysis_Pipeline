@@ -13,8 +13,8 @@ Tools should be run in the following order:
 | 1 | `preprocessing/` | Stack microscope TIFF slices, correct GFP XY offset, Richardson-Lucy deconvolution |
 | 2 | `roi_drawing/` | Automated ROI detection around cells using Cellpose (writes to `roi_original/`) |
 | 3 | *(manual)* ImageJ `Color_Merge_Automated_PreloadROIs_Adjust.ijm` | User refines ROIs and saves the edited set to `roi/` |
-| 4 | `roi_cropping/` *(scaffold; implementation pending)* | Crop each ROI's single-cell stack and re-origin the ROI coords |
-| 5 | `background_subtraction/` *(scaffold; implementation pending)* | Per-cell background subtraction |
+| 4 | `roi_cropping/` | Crop each ROI's single-cell stack from the decon images and re-origin the ROI coords |
+| 5 | `background_subtraction/` | Per-cell background subtraction (mean-inside-ROI × multiplier, clamped) |
 | 6 | `manders_mcc/` | Colocalization analysis (Manders' coefficients + Pearson's) |
 
 ---
@@ -84,6 +84,54 @@ python roi_detect.py
 ```
 
 See `roi_drawing/README.md` for full usage and options.
+
+---
+
+### Manual ROI editing (ImageJ — kept as-is)
+
+Between `roi_drawing/` and `roi_cropping/`, the user runs the ImageJ macro
+`Color_Merge_Automated_PreloadROIs_Adjust.ijm` (preserved in
+`roi_cropping/matlab_reference/`). It loads each image pair plus the
+auto-generated ROIs from `roi_original/` so the user can add, remove,
+or refine ROIs by hand, then saves the edited set to a sibling `roi/`
+folder. This is the only manual step in the pipeline.
+
+---
+
+### ROI Cropping (`roi_cropping/`)
+
+Reads the user-edited ROI zips and the decon stacks and produces one
+cropped single-cell stack per ROI in flat `Cropped/{gfp,cy}/` folders,
+with all pixels outside the ROI zeroed and the ROI re-origined to the
+crop-local frame. Replaces the old MATLAB
+`H_roi_duplicate_image_all_channels_Recursive.m` + ImageJ
+`ROI_Select_Duplicate_TIFF_Loop.ijm` two-step flow with a single pass.
+
+**Run:**
+```bash
+cd roi_cropping
+python roi_crop.py --input-dir /path/to/main_folder
+```
+
+See `roi_cropping/README.md` for full usage and options.
+
+---
+
+### Background Subtraction (`background_subtraction/`)
+
+For each cropped cell, measures the mean intensity inside the ROI on
+slice 0, multiplies by a user-set multiplier (default 1.25, clamped to
+`[100, 5000]`), and subtracts that constant from every Z slice. Writes
+to `Background_Subtracted/{gfp,cy}/`, which is what `manders_mcc/`
+reads. Python port of `Background_Subtraction_Tailored.ijm`.
+
+**Run:**
+```bash
+cd background_subtraction
+python bg_subtract.py --input-dir /path/to/main_folder
+```
+
+See `background_subtraction/README.md` for full usage and options.
 
 ---
 
