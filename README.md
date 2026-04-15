@@ -153,6 +153,32 @@ See `manders_mcc/README.md` for full usage and options.
 
 ---
 
+## Batch runner (`run_experiment.py`)
+
+A convenience wrapper that chains the three post-ImageJ-edit stages
+(`roi_cropping → background_subtraction → manders_mcc`) across every
+sample in an experiment. Use it when you've finished the manual ROI
+editing in Fiji and want to go from `<sample>/{gfp,cy,roi}/` all the
+way to final colocalization CSVs in one command.
+
+**Run:**
+```bash
+python run_experiment.py --input-dir /path/to/main_folder
+```
+
+The individual stage scripts (`roi_crop.py`, `bg_subtract.py`,
+`standalone_analysis.py`) are untouched and still usable on their own
+when you want to iterate on a single stage. Stages can also be skipped
+individually in the batch runner via `--skip-roi-cropping`,
+`--skip-background-subtraction`, `--skip-manders-mcc`.
+
+Preprocessing + ROI drawing are intentionally **not** bundled in here —
+both need per-experiment inputs (PSFs, Cellpose parameters), and the
+manual Fiji ROI edit sits between them, so chaining them with the
+post-edit stages wouldn't be useful.
+
+---
+
 ## Adding New Tools
 
 When adding a new pipeline step:
