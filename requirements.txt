@@ -6,3 +6,5 @@ scikit-image
 roifile
 matplotlib
 tqdm
+pyimagej>=1.4
+scyjava>=1.9

@@ -112,9 +112,24 @@ After a full run:
 
 ## Install
 
-All dependencies come from the repo-root `requirements.txt`. If you want
-the optional torch/MPS deconvolution backend on Apple Silicon, install
-PyTorch as well:
+Python dependencies come from the repo-root `requirements.txt`. The
+default `dl2` engine additionally needs:
+
+- **A JDK (Java 8+)** — e.g. `brew install openjdk` on macOS,
+  `sudo apt install default-jdk` on Ubuntu.
+- **Fiji** with the **DeconvolutionLab2** plugin installed:
+  1. Download Fiji: <https://imagej.net/software/fiji/downloads>
+  2. Open Fiji → `Help → Update... → Manage Update Sites`
+  3. Enable **DeconvolutionLab2**, then click `Apply and Close`
+  4. Click `Apply changes` in the updater to download `DeconvolutionLab_2.jar`
+     into `Fiji.app/plugins/`.
+- **PyImageJ + scyjava**: `pip install pyimagej scyjava` (already in
+  `requirements.txt`).
+
+Point the CLI at your Fiji with `--fiji-dir /path/to/Fiji.app` or export
+`FIJI_DIR` in your shell profile so you don't have to pass it every run.
+
+If you want the optional torch/MPS fallback engine, install PyTorch:
 
 ```bash
 pip install torch
@@ -126,8 +141,14 @@ pip install torch
 python preprocess.py \
     --input-dir /path/to/main_folder \
     --gfp-psf   /path/to/gfp_psf.tif \
-    --cy-psf    /path/to/cy_psf.tif
+    --cy-psf    /path/to/cy_psf.tif \
+    --fiji-dir  /Applications/Fiji.app
 ```
+
+GFP and Cy deconvolution run **concurrently** by default — the script
+launches two worker threads that share a single Fiji JVM, cutting
+wall-clock time roughly in half compared to the sequential MATLAB
+pipeline. Pass `--sequential-channels` to disable.
 
 ### Common options
 
@@ -135,24 +156,35 @@ python preprocess.py \
   matches the MATLAB pipeline.
 - `--gfp-offset X Y` — XY pixel shift applied to every GFP slice. Default
   `5 -2`. Pass `0 0` to disable.
-- `--backend scipy|torch` — FFT backend for deconvolution. `scipy`
-  (default) is CPU-based and fast on Apple Silicon via Accelerate.
-  `torch` enables MPS / CUDA.
-- `--torch-device cpu|mps|cuda` — only used with `--backend torch`;
+- `--engine dl2|scipy|torch` — deconvolution engine.
+  - `dl2` (default) calls the DeconvolutionLab2 Java plugin via PyImageJ.
+    Matches the original MATLAB pipeline bit-for-bit. Needs Fiji + JDK.
+  - `scipy` is a pure-Python FFT-based Richardson-Lucy on CPU — no Fiji,
+    no JVM. Not numerically identical to DL2 but close.
+  - `torch` is the same pure-Python RL, but in PyTorch for
+    MPS / CUDA acceleration.
+- `--fiji-dir /path/to/Fiji.app` — only used with `--engine dl2`.
+  Also reads `$FIJI_DIR` from the environment.
+- `--torch-device cpu|mps|cuda` — only used with `--engine torch`;
   default `mps`.
+- `--sequential-channels` — run GFP then Cy back-to-back instead of
+  concurrently. Useful for debugging or on very memory-constrained
+  machines.
 - `--skip-cleanup`, `--skip-stacking`, `--skip-consolidate`,
   `--skip-deconvolution` — run subsets of the pipeline. Useful for
   re-running just the deconvolution after updating a PSF.
 
 ### Apple Silicon (M1/M2/M3/M4)
 
-The default `scipy` backend is typically fast enough — SciPy's FFT goes
-through Apple's Accelerate framework, which is well-tuned for these
-machines. If you want to try GPU-accelerated deconvolution via Metal:
+- `--engine dl2` works fine under Apple Silicon; make sure you're using
+  a `arm64` JDK (e.g. `brew install openjdk`).
+- The `scipy` fallback goes through Apple's Accelerate framework via
+  pocketfft and is fast in practice.
+- For GPU-accelerated Python RL via Metal:
 
 ```bash
 python preprocess.py --input-dir ... --gfp-psf ... --cy-psf ... \
-    --backend torch --torch-device mps
+    --engine torch --torch-device mps
 ```
 
 ### Example: re-deconvolve only
@@ -177,12 +209,17 @@ Richardson-Lucy implemented as standard multiplicative updates:
 estimate_{n+1} = estimate_n * conv(image / conv(estimate_n, psf), mirror(psf))
 ```
 
-Both backends use FFT-based convolution (`scipy.signal.fftconvolve` or
-`torch.fft.fftn`) and produce identical results up to floating-point
-noise. Output is rescaled to the uint16 range only when Richardson-Lucy
-produces values outside `[0, 65535]`, matching the MATLAB behavior.
-
-PSFs are normalized to sum to 1 before use.
+- **`dl2`** engine: calls DeconvolutionLab2 directly via PyImageJ, with
+  the same arguments the MATLAB pipeline used:
+  `DL2.RL(image, psf, 30.0, '-out stack short')`. Image I/O is handled
+  by ImageJ itself (`IJ.openImage` / `IJ.saveAsTiff`), so the on-disk
+  format matches ImageJ's convention exactly.
+- **`scipy` / `torch`** engines: FFT-based Python RL using
+  `scipy.signal.fftconvolve` or `torch.fft.fftn`. Both produce identical
+  results to each other up to floating-point noise. Output is rescaled
+  to the uint16 range only when RL produces values outside
+  `[0, 65535]`, matching the MATLAB behavior. PSFs are normalized to
+  sum to 1 before use.
 
 ## Parameter provenance
 
@@ -195,3 +232,4 @@ The hardcoded defaults mirror the MATLAB pipeline:
 | R-L iterations         | `F_Cy5_runDeconvolutionLab2_parallel.m` L91     | `30`    |
 | Output dtype           | `F_*` scripts, `uint16()` cast                  | uint16  |
 | Uncompressed TIFF      | `F_*` scripts, `'Compression', 'none'`          | yes     |
+| Deconvolution engine   | `DL2.RL(image, psf, 30, '-out stack short')`    | same (default) |

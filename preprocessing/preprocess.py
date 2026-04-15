@@ -104,17 +104,32 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "Use '0 0' to disable.",
     )
     p.add_argument(
-        "--backend",
-        choices=("scipy", "torch"),
-        default="scipy",
-        help="Deconvolution FFT backend. 'scipy' (default) is CPU and fast on "
-        "Apple Silicon via Accelerate. 'torch' enables MPS/CUDA acceleration.",
+        "--engine",
+        choices=("dl2", "scipy", "torch"),
+        default="dl2",
+        help="Deconvolution engine. 'dl2' (default) calls the DeconvolutionLab2 "
+        "Java plugin via PyImageJ — this matches the original MATLAB pipeline "
+        "bit-for-bit but needs a local Fiji install with the DL2 plugin. "
+        "'scipy' and 'torch' are pure-Python fallbacks that do not require Fiji.",
+    )
+    p.add_argument(
+        "--fiji-dir",
+        type=Path,
+        default=None,
+        help="Path to your Fiji.app directory (needed for --engine dl2). "
+        "Overrides $FIJI_DIR. See README for install instructions.",
     )
     p.add_argument(
         "--torch-device",
         choices=("cpu", "mps", "cuda"),
         default="mps",
-        help="Torch device when --backend=torch (default: mps for Apple Silicon).",
+        help="Torch device when --engine=torch (default: mps for Apple Silicon).",
+    )
+    p.add_argument(
+        "--sequential-channels",
+        action="store_true",
+        help="Deconvolve GFP then Cy sequentially. By default they run "
+        "concurrently (one thread or process per channel).",
     )
     p.add_argument(
         "--skip-cleanup",
@@ -215,8 +230,9 @@ def main() -> None:
     if not args.skip_deconvolution:
         config = DeconvolutionConfig(
             num_iter=args.iterations,
-            backend=args.backend,
+            engine=args.engine,
             torch_device=args.torch_device,
+            fiji_dir=args.fiji_dir,
         )
         decon_folder = main_folder / "Decon"
         if not decon_folder.is_dir():
@@ -225,21 +241,48 @@ def main() -> None:
                 "Did you skip stacking or consolidate?"
             )
 
+        engine_label = config.engine
+        if config.engine == "torch":
+            engine_label = f"torch/{config.torch_device}"
         print(f">>> Step 5: Deconvolution (Richardson-Lucy, "
-              f"{config.num_iter} iter, backend={config.backend}"
-              + (f"/{config.torch_device}" if config.backend == "torch" else "")
-              + ")")
-
+              f"{config.num_iter} iter, engine={engine_label})")
         print(f"    GFP PSF: {args.gfp_psf}")
-        gfp_out = deconvolve_channel(
-            decon_folder, args.gfp_psf, "gfp", config,
-        )
-        print(f"    Wrote {len(gfp_out)} GFP deconvoluted stack(s).")
-
         print(f"    Cy  PSF: {args.cy_psf}")
-        cy_out = deconvolve_channel(
-            decon_folder, args.cy_psf, "cy", config,
-        )
+
+        # For the DL2 engine: pre-initialize the JVM on the main thread so
+        # the two channel workers share a single Fiji gateway. (JVM startup
+        # isn't thread-safe and can't be restarted; one gateway per
+        # process, used from multiple Java-backed threads.)
+        if config.engine == "dl2":
+            from preprocess.deconvolve_dl2 import _get_gateway  # noqa: WPS450
+            _get_gateway(config.fiji_dir)
+
+        # Parallelize GFP + Cy5 unless the user asked for sequential, or
+        # the engine is torch on a single GPU (where they'd just serialize
+        # on the device anyway).
+        parallel = not args.sequential_channels and config.engine != "torch"
+
+        if parallel:
+            from concurrent.futures import ThreadPoolExecutor
+            print(f"    Running GFP + Cy concurrently (engine={config.engine}).")
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                gfp_fut = pool.submit(
+                    deconvolve_channel, decon_folder, args.gfp_psf, "gfp", config,
+                )
+                cy_fut = pool.submit(
+                    deconvolve_channel, decon_folder, args.cy_psf, "cy", config,
+                )
+                gfp_out = gfp_fut.result()
+                cy_out = cy_fut.result()
+        else:
+            gfp_out = deconvolve_channel(
+                decon_folder, args.gfp_psf, "gfp", config,
+            )
+            cy_out = deconvolve_channel(
+                decon_folder, args.cy_psf, "cy", config,
+            )
+
+        print(f"    Wrote {len(gfp_out)} GFP deconvoluted stack(s).")
         print(f"    Wrote {len(cy_out)} Cy deconvoluted stack(s).\n")
     else:
         print(">>> Step 5: SKIPPED (--skip-deconvolution)\n")

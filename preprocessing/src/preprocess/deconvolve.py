@@ -2,17 +2,20 @@
 
 The MATLAB pipeline used DeconvolutionLab2 with ``DL2.RL(image, psf, 30)`` —
 classic Richardson-Lucy with 30 iterations against a user-supplied measured
-PSF. This module implements the same algorithm in Python with two
-interchangeable FFT backends:
+PSF. This module supports three interchangeable engines:
 
-- **scipy** (default): ``scipy.signal.fftconvolve`` on CPU. Uses pocketfft,
-  which on Apple Silicon is routed through the Accelerate framework and
-  is fast enough in practice for typical widefield stacks.
-- **torch** (optional): same algorithm in PyTorch, which enables MPS
-  acceleration on Apple Silicon ``Mac`` or CUDA on NVIDIA. Loaded lazily
-  so the scipy path has no torch dependency.
+- **dl2** (default): calls the actual DeconvolutionLab2 Java plugin via
+  PyImageJ, so results match the MATLAB pipeline bit-for-bit. Requires
+  a local Fiji install with DL2 plugin + a JDK. See ``deconvolve_dl2.py``.
+- **scipy**: ``scipy.signal.fftconvolve`` on CPU. Pure Python — no JVM,
+  no Fiji, no plugin. Numerically close to DL2 but not identical
+  (boundary handling / convergence differ).
+- **torch**: same algorithm as scipy but in PyTorch, which enables MPS
+  acceleration on Apple Silicon or CUDA on NVIDIA.
 
-Both backends produce the same output up to floating-point noise.
+The scipy and torch engines produce identical output up to floating-point
+noise. DL2 is the reference and should be preferred whenever it is
+available.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 import numpy as np
 import tifffile
@@ -29,15 +32,16 @@ from scipy.signal import fftconvolve
 log = logging.getLogger(__name__)
 
 
-Backend = Literal["scipy", "torch"]
+Engine = Literal["dl2", "scipy", "torch"]
 TorchDevice = Literal["cpu", "mps", "cuda"]
 
 
 @dataclass
 class DeconvolutionConfig:
     num_iter: int = 30
-    backend: Backend = "scipy"
-    torch_device: TorchDevice = "cpu"
+    engine: Engine = "dl2"
+    torch_device: TorchDevice = "mps"
+    fiji_dir: Optional[Path] = None  # only used when engine == "dl2"
 
 
 # ---------------------------------------------------------------------------
@@ -136,10 +140,14 @@ def richardson_lucy(
     image: np.ndarray,
     psf: np.ndarray,
     num_iter: int = 30,
-    backend: Backend = "scipy",
+    backend: Literal["scipy", "torch"] = "scipy",
     torch_device: TorchDevice = "cpu",
 ) -> np.ndarray:
-    """Run Richardson-Lucy deconvolution.
+    """Run pure-Python Richardson-Lucy deconvolution.
+
+    This is the numpy/torch path used by ``engine="scipy"`` and
+    ``engine="torch"``. The DL2 engine bypasses this function entirely
+    and calls the Java plugin directly (see ``deconvolve_dl2.py``).
 
     Parameters
     ----------
@@ -148,7 +156,7 @@ def richardson_lucy(
     num_iter
         Iteration count. The original MATLAB pipeline uses 30.
     backend
-        ``"scipy"`` (CPU, default) or ``"torch"`` (any torch device).
+        ``"scipy"`` (CPU) or ``"torch"`` (any torch device).
     torch_device
         Only used when ``backend="torch"``.
     """
@@ -200,6 +208,56 @@ def _save_uint16_stack(path: Path, stack: np.ndarray) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _deconvolve_file_python(
+    input_path: Path,
+    output_path: Path,
+    psf: np.ndarray,
+    config: DeconvolutionConfig,
+) -> None:
+    """Per-file RL for the scipy / torch engines (pre-loaded PSF)."""
+    image = _load_tiff_stack(input_path)
+    if image.ndim != psf.ndim:
+        raise ValueError(
+            f"Dimension mismatch: image {image.shape} vs PSF {psf.shape}. "
+            "Both must have the same number of axes."
+        )
+    backend = "scipy" if config.engine == "scipy" else "torch"
+    result = richardson_lucy(
+        image, psf,
+        num_iter=config.num_iter,
+        backend=backend,
+        torch_device=config.torch_device,
+    )
+    _save_uint16_stack(output_path, result)
+
+
+def _iter_channel_jobs(
+    decon_folder: Path,
+    channel_group: str,
+) -> list[tuple[Path, Path]]:
+    """Collect ``(input_tif, output_tif)`` pairs for every stack to deconvolve.
+
+    Walks every ``<decon_folder>/<sample>/<channel_group>/*.tif`` pair and
+    maps it to its matching
+    ``<decon_folder>/Deconvoluted/<sample>/<channel_group>/<name>_decon.tif``.
+    """
+    deconvoluted_root = decon_folder / "Deconvoluted"
+    jobs: list[tuple[Path, Path]] = []
+    for channel_dir in sorted(decon_folder.rglob(channel_group)):
+        if not channel_dir.is_dir():
+            continue
+        if deconvoluted_root in channel_dir.parents or channel_dir == deconvoluted_root:
+            continue
+        sample_rel = channel_dir.parent.relative_to(decon_folder)
+        target_dir = deconvoluted_root / sample_rel / channel_group
+        for stack_path in sorted(channel_dir.glob("*.tif")):
+            if stack_path.name.endswith("_decon.tif"):
+                continue
+            out_path = target_dir / f"{stack_path.stem}_decon.tif"
+            jobs.append((stack_path, out_path))
+    return jobs
+
+
 def deconvolve_channel(
     decon_folder: Path,
     psf_path: Path,
@@ -227,7 +285,7 @@ def deconvolve_channel(
     channel_group
         Folder name to match, e.g. ``"gfp"`` or ``"cy"``.
     config
-        Algorithm parameters (iterations, backend, device).
+        Algorithm parameters (iterations, engine, device).
     """
     decon_folder = Path(decon_folder)
     psf_path = Path(psf_path)
@@ -236,48 +294,40 @@ def deconvolve_channel(
     if not psf_path.is_file():
         raise FileNotFoundError(psf_path)
 
-    psf = _load_tiff_stack(psf_path)
-    log.info("Loaded PSF %s with shape %s", psf_path, psf.shape)
-
     deconvoluted_root = decon_folder / "Deconvoluted"
     deconvoluted_root.mkdir(parents=True, exist_ok=True)
 
+    jobs = _iter_channel_jobs(decon_folder, channel_group)
+    if not jobs:
+        log.info("No %s stacks to deconvolve under %s", channel_group, decon_folder)
+        return []
+
+    log.info("Found %d %s stack(s) to deconvolve (engine=%s)",
+             len(jobs), channel_group, config.engine)
+
     outputs: list[Path] = []
-    for channel_dir in sorted(decon_folder.rglob(channel_group)):
-        if not channel_dir.is_dir():
-            continue
-        if deconvoluted_root in channel_dir.parents or channel_dir == deconvoluted_root:
-            continue
 
-        # The sample is the parent of the channel folder, relative to Decon/.
-        # For the flat 2-level layout this is just the sample name; for nested
-        # layouts consolidate() has already flattened it to e.g.
-        # "Insulin__0min".
-        sample_rel = channel_dir.parent.relative_to(decon_folder)
-        target_dir = deconvoluted_root / sample_rel / channel_group
-        target_dir.mkdir(parents=True, exist_ok=True)
-
-        for stack_path in sorted(channel_dir.glob("*.tif")):
-            if stack_path.name.endswith("_decon.tif"):
-                continue
-            log.info("Deconvolving %s", stack_path)
-            image = _load_tiff_stack(stack_path)
-            if image.ndim != psf.ndim:
-                # Bail loudly rather than silently misbehaving.
-                raise ValueError(
-                    f"Dimension mismatch: image {image.shape} vs PSF {psf.shape}. "
-                    "Both must have the same number of axes."
-                )
-            result = richardson_lucy(
-                image, psf,
+    if config.engine == "dl2":
+        # DL2 handles its own I/O via ImageJ — no numpy loading on our side.
+        from .deconvolve_dl2 import deconvolve_file as _dl2_deconvolve_file
+        for input_path, output_path in jobs:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            log.info("Deconvolving (DL2) %s", input_path)
+            _dl2_deconvolve_file(
+                input_path, output_path, psf_path,
                 num_iter=config.num_iter,
-                backend=config.backend,
-                torch_device=config.torch_device,
+                fiji_dir=config.fiji_dir,
             )
-            output_name = f"{stack_path.stem}_decon.tif"
-            final_path = target_dir / output_name
-            _save_uint16_stack(final_path, result)
-            outputs.append(final_path)
-            log.info("Wrote %s", final_path)
+            outputs.append(output_path)
+            log.info("Wrote %s", output_path)
+    else:
+        psf = _load_tiff_stack(psf_path)
+        log.info("Loaded PSF %s with shape %s", psf_path, psf.shape)
+        for input_path, output_path in jobs:
+            log.info("Deconvolving (%s) %s", config.engine, input_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            _deconvolve_file_python(input_path, output_path, psf, config)
+            outputs.append(output_path)
+            log.info("Wrote %s", output_path)
 
     return outputs
