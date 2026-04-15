@@ -93,6 +93,12 @@ def _get_gateway(fiji_dir: Path | str | None):
         resolved = _resolve_fiji_dir(fiji_dir)
         _verify_dl2_plugin(resolved)
 
+        # DL2's deconvolution monitor tries to create Swing windows.
+        # Setting java.awt.headless=true before the JVM starts prevents this.
+        # Must be done here — the JVM caches the headless state at class-load
+        # time and cannot be changed afterwards.
+        scyjava.config.add_option("-Djava.awt.headless=true")
+
         log.info("Starting headless Fiji JVM from %s ...", resolved)
         ij = imagej.init(str(resolved), mode="headless")
         log.info("Fiji %s ready.", ij.getVersion())
@@ -159,8 +165,11 @@ def deconvolve_file(
         raise RuntimeError(f"IJ.openImage returned null for PSF: {psf_path}")
 
     try:
-        # Exact MATLAB call: DL2.RL(image, psf, 30.0, '-out stack short')
-        result_imp = DL2.RL(imp_image, imp_psf, float(num_iter), "-out stack short")
+        # '-out stack short' matches the MATLAB output type (uint16 ImagePlus).
+        # '-system' tells DL2 to write its progress log to stdout instead of
+        # opening a Swing monitor window — required for headless operation.
+        result_imp = DL2.RL(imp_image, imp_psf, float(num_iter),
+                            "-out stack short -system")
         if result_imp is None:
             raise RuntimeError(
                 f"DL2.RL returned null for {input_path.name} "
