@@ -1,10 +1,16 @@
 # Background Subtraction
 
-Python port of the ImageJ
+Per-cell, per-slice background subtraction. Generalization of the
+ImageJ
 [`Background_Subtraction_Tailored.ijm`](./imagej_reference/Background_Subtraction_Tailored.ijm)
-macro. Subtracts a per-cell constant from every cropped single-cell stack so
-only puncta above the cell's diffuse background remain — input for
-`manders_mcc/` colocalization.
+macro: subtracts a tailored constant from each cropped single-cell
+stack so only puncta above the cell's diffuse background remain —
+input for `manders_mcc/` colocalization.
+
+The original macro measured the mean inside the ROI **only on slice 0**
+and reused that constant for the whole Z stack. This Python port
+measures **per slice**, so Z-dependent haze is subtracted correctly.
+For single-slice images the two behaviors are identical.
 
 ## What it does
 
@@ -16,11 +22,11 @@ For every `Cropped/` folder produced by `roi_cropping/`:
    image pair (this matches `ROI_Select_Duplicate_TIFF_Loop.ijm`'s
    numbering, and is what `roi_cropping/` writes by construction).
 3. For each image pair (per channel independently):
-   - Compute the **mean intensity inside the ROI on slice 0**
-     (matches the ImageJ macro: it calls `Measure` once on the active
-     slice, not across Z).
-   - `subtract_value = mean * multiplier`, clamped to `[100, 5000]`.
-   - Subtract that constant from every pixel of every Z slice. Negative
+   - For every Z slice, compute the **mean intensity inside the ROI on
+     that slice**.
+   - Per slice, `subtract_value = mean * multiplier`, clamped to
+     `[100, 5000]`.
+   - Subtract each slice's value from that slice. Negative
      intermediates are clipped at zero before the cast back to uint16.
 4. Save into a sibling `Background_Subtracted/{gfp,cy}/` folder with
    the same filename as the source.
@@ -80,11 +86,15 @@ the multiplier match the ImageJ macro defaults verbatim.
 
 ## Parameter provenance
 
-| Parameter | ImageJ source | Default |
-|-----------|---------------|---------|
-| GFP multiplier | macro `getNumber(... 1.25)` L21 | `1.25` |
-| Cy multiplier | macro `getNumber(... 1.25)` L22 | `1.25` |
-| Lower clamp | macro `if (subtractValue < 100)` L132 | `100` |
-| Upper clamp | macro `if (subtractValue > 5000)` L133 | `5000` |
-| Measurement scope | macro `Measure` on active slice (L125) | slice 0 |
-| Subtraction scope | macro `for (s=1..nSlices)` (L138-142) | every slice |
+| Parameter | ImageJ source | This port |
+|-----------|---------------|-----------|
+| GFP multiplier | macro `getNumber(... 1.25)` L21 | `1.25` (same) |
+| Cy multiplier | macro `getNumber(... 1.25)` L22 | `1.25` (same) |
+| Lower clamp | macro `if (subtractValue < 100)` L132 | `100` (same) |
+| Upper clamp | macro `if (subtractValue > 5000)` L133 | `5000` (same) |
+| Measurement scope | macro `Measure` on active slice (L125) — slice 0 only | **per slice** (intentional generalization) |
+| Subtraction scope | macro `for (s=1..nSlices)` (L138-142) — same constant for every slice | **per-slice value applied per slice** |
+
+The only intentional deviation from the macro is the per-slice
+measurement, which reduces to the macro's behavior on single-slice
+inputs and is strictly more accurate on Z stacks.

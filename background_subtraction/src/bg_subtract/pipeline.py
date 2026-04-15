@@ -1,17 +1,23 @@
-"""Per-cell background subtraction — port of ``Background_Subtraction_Tailored.ijm``.
+"""Per-cell, per-slice background subtraction.
 
-Algorithm (matches the original ImageJ macro exactly):
+Generalization of ``Background_Subtraction_Tailored.ijm``: where the
+ImageJ macro measured the per-cell mean only on slice 0 and reused that
+constant for every Z slice, this Python port measures **per slice** so
+Z-dependent diffuse background (e.g. out-of-focus haze that varies with
+Z) is subtracted correctly. On single-slice inputs the two behaviors
+are identical.
+
+Algorithm:
 
 1. For each ``Cropped/`` folder produced by ``roi_cropping/``, load the
    sorted gfp/ and cy/ TIFF lists and the combined ``roi.zip``.
 2. For each image pair ``i`` (sorted by numeric index in the filename):
    - Select ROI ``i`` from the zip.
-   - Measure the mean intensity *inside the ROI*, on the first slice only
-     (matches the macro: it calls Measure once on the active slice without
-     cycling through Z).
-   - Compute ``subtract_value = mean * multiplier``, clamped to
+   - For every Z slice, measure the mean intensity *inside the ROI*.
+   - Per slice, ``subtract_value = mean * multiplier``, clamped to
      ``[100, 5000]``.
-   - Subtract that constant from every pixel of every slice.
+   - Subtract each slice's value from that slice. Negative
+     intermediates are clipped at zero before the cast back to uint16.
 3. Save to ``<sample>/Background_Subtracted/{gfp,cy}/<filename>.tif``,
    preserving the source filename.
 
@@ -86,29 +92,46 @@ def _roi_mask_for_image(roi: roifile.ImagejRoi, image_hw: tuple[int, int]) -> np
     return mask
 
 
-def _compute_subtract_value(
+def _compute_per_slice_subtract_values(
     stack: np.ndarray,
     roi: roifile.ImagejRoi,
     multiplier: float,
     *,
     floor: float = 100.0,
     ceiling: float = 5000.0,
-) -> float:
-    """Match ImageJ macro: mean of slice 0 inside ROI, * multiplier, clamped."""
+) -> np.ndarray:
+    """Per-slice subtraction value: mean inside ROI on each slice * multiplier, clamped.
+
+    Returns a 1D array of length ``stack.shape[0]`` (one value per Z slice).
+
+    This is a per-slice generalization of the ImageJ macro, which only
+    measured slice 0 and reused that constant. Per-slice handles
+    Z-dependent diffuse background (e.g. when out-of-focus haze varies
+    along Z) far better, and reduces to the macro's behavior on
+    single-slice images.
+    """
     mask = _roi_mask_for_image(roi, stack.shape[1:])
     if not mask.any():
-        return floor
-    mean_intensity = float(stack[0][mask].mean())
-    value = mean_intensity * multiplier
-    return float(np.clip(value, floor, ceiling))
+        return np.full(stack.shape[0], floor, dtype=np.float32)
+    means = stack[:, mask].mean(axis=1)
+    values = means * multiplier
+    return np.clip(values, floor, ceiling).astype(np.float32)
 
 
-def _subtract_constant(stack: np.ndarray, value: float) -> np.ndarray:
-    """Subtract ``value`` from every pixel; clip negatives to 0 (uint16-friendly)."""
-    # Operate in float to allow negative intermediates, then clip at zero so
-    # the cast back to uint16 doesn't wrap. Matches ImageJ's
-    # ``run("Subtract...", "value=N")`` on a uint16 image.
-    out = stack.astype(np.float32) - float(value)
+def _subtract_per_slice(stack: np.ndarray, values: np.ndarray) -> np.ndarray:
+    """Subtract ``values[z]`` from every pixel of slice ``z``; clip negatives to 0.
+
+    Operates in float so the negative intermediates don't wrap on the
+    cast back to uint16. Matches ImageJ's ``run("Subtract...", ...)``
+    semantics on a uint16 image, applied per slice.
+    """
+    if values.shape != (stack.shape[0],):
+        raise ValueError(
+            f"per-slice values shape {values.shape} does not match "
+            f"stack Z dim {stack.shape[0]}"
+        )
+    out = stack.astype(np.float32)
+    out -= values[:, np.newaxis, np.newaxis]
     np.maximum(out, 0.0, out=out)
     return out
 
@@ -185,20 +208,21 @@ def subtract_sample_folder(
         gfp_stack = _load_stack(gfp_path)
         cy_stack = _load_stack(cy_path)
 
-        gfp_sub = _compute_subtract_value(
+        gfp_sub = _compute_per_slice_subtract_values(
             gfp_stack, roi, gfp_multiplier, floor=floor, ceiling=ceiling,
         )
-        cy_sub = _compute_subtract_value(
+        cy_sub = _compute_per_slice_subtract_values(
             cy_stack, roi, cy_multiplier, floor=floor, ceiling=ceiling,
         )
         log.info(
-            "[%s] pair %d (%s / %s): gfp_sub=%.1f, cy_sub=%.1f",
+            "[%s] pair %d (%s / %s): gfp_sub_per_slice=[%s], cy_sub_per_slice=[%s]",
             cropped_root.parent.name, i + 1, gfp_path.name, cy_path.name,
-            gfp_sub, cy_sub,
+            ", ".join(f"{v:.1f}" for v in gfp_sub),
+            ", ".join(f"{v:.1f}" for v in cy_sub),
         )
 
-        gfp_out_arr = _subtract_constant(gfp_stack, gfp_sub)
-        cy_out_arr = _subtract_constant(cy_stack, cy_sub)
+        gfp_out_arr = _subtract_per_slice(gfp_stack, gfp_sub)
+        cy_out_arr = _subtract_per_slice(cy_stack, cy_sub)
 
         gfp_out_path = out_gfp_dir / gfp_path.name
         cy_out_path = out_cy_dir / cy_path.name
