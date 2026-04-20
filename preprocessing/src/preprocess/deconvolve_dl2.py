@@ -107,6 +107,8 @@ def deconvolve_file(
 
     # DL2 Run command: -out stack short NAME writes NAME.tif in -path dir.
     # Brackets around file paths handle spaces in directory names.
+    # -path takes a plain directory string (no brackets; DL2 only handles
+    # bracket-quoting for the -image / -psf file arguments).
     macro = (
         f'print("DL2 starting: {input_path.name}");\n'
         f'run("DeconvolutionLab2 Run", '
@@ -114,9 +116,10 @@ def deconvolve_file(
         f'-psf file [{psf_path}] '
         f'-algorithm RL {num_iter} '
         f'-out stack short {output_path.stem} '
-        f'-path [{output_path.parent}]");\n'
+        f'-path {output_path.parent}");\n'
         f'print("DL2 finished: {input_path.name}");\n'
     )
+    log.debug("DL2 macro:\n%s", macro)
 
     fd, macro_path = tempfile.mkstemp(suffix=".ijm")
     try:
@@ -133,10 +136,10 @@ def deconvolve_file(
 
         if result.stdout:
             for line in result.stdout.strip().splitlines():
-                log.debug("Fiji: %s", line)
-        if result.returncode != 0 and result.stderr:
+                log.info("Fiji: %s", line)
+        if result.stderr:
             for line in result.stderr.strip().splitlines():
-                log.warning("Fiji stderr: %s", line)
+                log.debug("Fiji stderr: %s", line)
     finally:
         try:
             os.unlink(macro_path)
@@ -161,6 +164,6 @@ def deconvolve_file(
         f"DL2 did not produce output at {output_path}.\n"
         f"Return code: {result.returncode}\n"
         f"Recent .tif in output dir: {[f.name for f in recent]}\n"
-        f"stdout: {(result.stdout or '(empty)')[-500:]}\n"
-        f"stderr: {(result.stderr or '(empty)')[-500:]}"
+        f"--- stdout ---\n{result.stdout or '(empty)'}\n"
+        f"--- stderr ---\n{result.stderr or '(empty)'}"
     )
