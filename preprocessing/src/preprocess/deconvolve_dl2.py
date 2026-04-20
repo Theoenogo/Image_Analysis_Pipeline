@@ -29,8 +29,12 @@ from __future__ import annotations
 import atexit
 import logging
 import os
+import tempfile
 import threading
 from pathlib import Path
+
+import numpy as np
+import tifffile
 
 log = logging.getLogger(__name__)
 
@@ -144,6 +148,34 @@ def _dispose_gateway() -> None:
         _IJ_GATEWAY = None
 
 
+def _open_as_imageplus(path: Path, IJ) -> "ij.ImagePlus":
+    """Open a TIFF as an ImagePlus with correct stack dimensions.
+
+    TIFFs written by tifffile without ``imagej=True`` lack the metadata
+    that ``IJ.openImage`` needs to interpret a 3D array as a Z-stack.
+    This helper re-writes through tifffile with ``imagej=True`` to a temp
+    file so ``IJ.openImage`` always sees proper ImageJ-format metadata.
+    """
+    arr = tifffile.imread(str(path))
+    if arr.ndim == 2:
+        arr = arr[np.newaxis, ...]
+
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".tif")
+    os.close(tmp_fd)
+    try:
+        tifffile.imwrite(tmp_path, arr, imagej=True, photometric="minisblack")
+        imp = IJ.openImage(tmp_path)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    if imp is None:
+        raise RuntimeError(f"IJ.openImage returned null for: {path}")
+    return imp
+
+
 def deconvolve_file(
     input_path: Path,
     output_path: Path,
@@ -153,13 +185,10 @@ def deconvolve_file(
 ) -> Path:
     """Deconvolve a single multi-page TIFF via ``DL2.RL``.
 
-    Uses ImageJ's own TIFF I/O: reads ``input_path`` + ``psf_path`` with
-    ``IJ.openImage`` (so ImageJ handles the stack dimensionality the same
-    way the MATLAB pipeline did), runs ``DL2.RL(image, psf, num_iter,
-    '-out stack short')``, and saves the result with ``IJ.saveAsTiff``
-    (uncompressed, uint16 — matching the MATLAB output).
-
-    The ``-out stack short`` option mirrors the MATLAB argument verbatim.
+    Reads ``input_path`` + ``psf_path`` via :func:`_open_as_imageplus`
+    (ensuring ImageJ-compatible metadata), runs ``DL2.RL(image, psf,
+    num_iter, '-out stack short')``, and saves the result with
+    ``IJ.saveAsTiff`` (uncompressed, uint16 — matching the MATLAB output).
     """
     input_path = Path(input_path)
     output_path = Path(output_path)
@@ -167,14 +196,8 @@ def deconvolve_file(
 
     _, DL2, IJ = _get_gateway(fiji_dir)
 
-    imp_image = IJ.openImage(str(input_path))
-    if imp_image is None:
-        raise RuntimeError(f"IJ.openImage returned null for image: {input_path}")
-
-    imp_psf = IJ.openImage(str(psf_path))
-    if imp_psf is None:
-        imp_image.close()
-        raise RuntimeError(f"IJ.openImage returned null for PSF: {psf_path}")
+    imp_image = _open_as_imageplus(input_path, IJ)
+    imp_psf = _open_as_imageplus(psf_path, IJ)
 
     try:
         # '-out stack short' matches the MATLAB output type (uint16 ImagePlus).

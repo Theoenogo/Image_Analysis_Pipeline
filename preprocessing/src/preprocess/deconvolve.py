@@ -200,7 +200,7 @@ def _save_uint16_stack(path: Path, stack: np.ndarray) -> None:
     else:
         rescaled = stack
     out = np.clip(np.rint(rescaled), 0, 65535).astype(np.uint16)
-    tifffile.imwrite(str(path), out, photometric="minisblack", compression=None)
+    tifffile.imwrite(str(path), out, imagej=True, photometric="minisblack", compression=None)
 
 
 # ---------------------------------------------------------------------------

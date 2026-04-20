@@ -94,7 +94,7 @@ def _read_slices(folder: Path) -> tuple[list[np.ndarray], list[Path]]:
 def _save_stack_uint16(path: Path, slices: list[np.ndarray]) -> None:
     """Save a list of 2D arrays as a multi-page uint16 TIFF."""
     stack = np.stack([np.asarray(s).astype(np.uint16) for s in slices], axis=0)
-    tifffile.imwrite(str(path), stack, photometric="minisblack")
+    tifffile.imwrite(str(path), stack, imagej=True, photometric="minisblack")
 
 
 def _process_channel_folder(
