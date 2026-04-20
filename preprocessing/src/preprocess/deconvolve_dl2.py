@@ -109,6 +109,7 @@ def deconvolve_file(
     # Brackets around file paths handle spaces in directory names.
     # -path takes a plain directory string (no brackets; DL2 only handles
     # bracket-quoting for the -image / -psf file arguments).
+    # Macro ends with run("Quit") so Fiji exits after the deconvolution.
     macro = (
         f'print("DL2 starting: {input_path.name}");\n'
         f'run("DeconvolutionLab2 Run", '
@@ -118,6 +119,7 @@ def deconvolve_file(
         f'-out stack short {output_path.stem} '
         f'-path {output_path.parent}");\n'
         f'print("DL2 finished: {input_path.name}");\n'
+        f'run("Quit");\n'
     )
     log.debug("DL2 macro:\n%s", macro)
 
@@ -127,8 +129,21 @@ def deconvolve_file(
         os.close(fd)
 
         log.info("Running DL2 via Fiji CLI: %s", input_path.name)
+
+        if sys.platform == "darwin":
+            # macOS: DL2 hardcodes a JFrame in Deconvolution.deconvolve(),
+            # so the JVM can't be headless. Launching via 'open -W -a'
+            # gives Fiji a proper macOS app context with display access.
+            # A brief Fiji window will appear during each deconvolution.
+            cmd = [
+                "open", "-W", "-a", str(resolved_fiji),
+                "--args", "-macro", macro_path,
+            ]
+        else:
+            cmd = [str(launcher), "-macro", macro_path]
+
         result = subprocess.run(
-            [str(launcher), "--headless", "-macro", macro_path],
+            cmd,
             capture_output=True,
             text=True,
             timeout=600,
