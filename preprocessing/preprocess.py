@@ -106,13 +106,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--engine",
         choices=("scipy", "torch", "dl2"),
-        default="scipy",
-        help="Deconvolution engine. 'scipy' (default) is pure-Python CPU-based "
+        default="dl2",
+        help="Deconvolution engine. 'dl2' (default) calls the "
+        "DeconvolutionLab2 Java plugin via PyImageJ and matches the "
+        "original MATLAB pipeline; requires Fiji + the DL2 plugin + a "
+        "display (doesn't work headless). 'scipy' is pure-Python CPU-based "
         "Richardson-Lucy — no Fiji, no JVM required. 'torch' uses the same "
-        "algorithm via PyTorch for MPS/CUDA acceleration. 'dl2' calls the "
-        "DeconvolutionLab2 Java plugin via PyImageJ and requires Fiji with "
-        "the DL2 plugin installed; note that DL2 does not work in fully "
-        "headless environments due to AWT GUI requirements.",
+        "algorithm via PyTorch for MPS/CUDA acceleration.",
     )
     p.add_argument(
         "--fiji-dir",

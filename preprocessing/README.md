@@ -114,17 +114,8 @@ After a full run:
 
 All dependencies come from the repo-root `requirements.txt`.
 
-The default `scipy` engine needs nothing beyond the standard requirements.
-
-If you want GPU-accelerated deconvolution via PyTorch (MPS on Apple
-Silicon, CUDA on NVIDIA):
-
-```bash
-pip install torch
-```
-
-The optional `dl2` engine calls the DeconvolutionLab2 Java plugin via
-PyImageJ and additionally requires:
+The default `dl2` engine matches the original MATLAB pipeline
+bit-for-bit and requires:
 
 - **A JDK (Java 8+)** — e.g. `brew install openjdk` on macOS,
   `sudo apt install default-jdk` on Ubuntu.
@@ -133,12 +124,24 @@ PyImageJ and additionally requires:
   2. Open Fiji → `Help → Update... → Manage Update Sites`
   3. Enable **DeconvolutionLab2**, then click `Apply and Close`
   4. Click `Apply changes` in the updater.
-- **PyImageJ + scyjava**: `pip install pyimagej scyjava`.
+- **PyImageJ + scyjava**: `pip install pyimagej scyjava` (already in
+  `requirements.txt`).
+- **A display**: the JVM runs in `interactive` mode (no Fiji main
+  window, but AWT enabled) because DL2 internally constructs Swing
+  components even for programmatic calls. Works on a local
+  Mac/Linux desktop; will NOT work over SSH-without-X-forwarding or
+  in a server/CI environment.
 
-> **Note:** `--engine dl2` does not work in fully headless environments
-> (terminal only, no display server). DL2's Java plugin internally creates
-> AWT/Swing GUI components that require a display, even when called
-> programmatically. Use `scipy` or `torch` when running without a screen.
+If you're running headless (server, SSH-only) or just don't want a
+Fiji/JDK install, use the pure-Python fallback — `--engine scipy` needs
+nothing beyond the standard requirements.
+
+For GPU-accelerated deconvolution via PyTorch (MPS on Apple Silicon,
+CUDA on NVIDIA), use `--engine torch` after:
+
+```bash
+pip install torch
+```
 
 Point the CLI at your Fiji with `--fiji-dir /path/to/Fiji.app` or export
 `FIJI_DIR` in your shell profile.

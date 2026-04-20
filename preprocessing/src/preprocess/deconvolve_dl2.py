@@ -5,11 +5,18 @@ class, the same arguments::
 
     result = DL2.RL(image, psf, 30.0, '-out stack short')
 
-This backend is a thin PyImageJ bridge: it starts a single headless Fiji
-JVM per Python process, resolves the ``DL2`` class from the
-``DeconvolutionLab_2.jar`` plugin, and invokes ``DL2.RL(...)`` on each
-stack. Image I/O is handled by ImageJ itself (``IJ.openImage`` /
-``IJ.saveAsTiff``), so there is no numpy <-> Java conversion step.
+This backend is a thin PyImageJ bridge: it starts a single Fiji JVM per
+Python process in ``interactive`` mode (AWT enabled, no main window),
+resolves the ``DL2`` class from the ``DeconvolutionLab_2.jar`` plugin,
+and invokes ``DL2.RL(...)`` on each stack. Image I/O is handled by
+ImageJ itself (``IJ.openImage`` / ``IJ.saveAsTiff``), so there is no
+numpy <-> Java conversion step.
+
+**Display required.** DL2 internally constructs AWT/Swing components
+even for programmatic calls, so the JVM can't be fully headless. This
+engine works on a local Mac/Linux desktop but will NOT work in a
+server/CI/SSH-only environment without X forwarding. Use the ``scipy``
+or ``torch`` engines in those cases.
 
 Because the JVM cannot be restarted inside one process, the gateway is
 cached in a module global and reused. Separate ``DL2.RL`` calls on
@@ -93,14 +100,16 @@ def _get_gateway(fiji_dir: Path | str | None):
         resolved = _resolve_fiji_dir(fiji_dir)
         _verify_dl2_plugin(resolved)
 
-        # DL2's deconvolution monitor tries to create Swing windows.
-        # Setting java.awt.headless=true before the JVM starts prevents this.
-        # Must be done here — the JVM caches the headless state at class-load
-        # time and cannot be changed afterwards.
-        scyjava.config.add_option("-Djava.awt.headless=true")
-
-        log.info("Starting headless Fiji JVM from %s ...", resolved)
-        ij = imagej.init(str(resolved), mode="headless")
+        # DL2 internally constructs AWT/Swing components (progress monitors,
+        # etc.) even for programmatic ``DL2.RL`` calls. PyImageJ's
+        # ``mode="headless"`` forces ``java.awt.headless=true``, which makes
+        # any AWT call throw ``HeadlessException``. ``mode="interactive"``
+        # starts the JVM with AWT enabled but doesn't pop the Fiji main
+        # window — good enough for DL2, as long as the user has a display
+        # (local Mac/Linux desktop). This will NOT work over an SSH session
+        # without X forwarding, or in a server/CI environment.
+        log.info("Starting Fiji JVM (interactive mode for DL2 AWT) from %s ...", resolved)
+        ij = imagej.init(str(resolved), mode="interactive")
         log.info("Fiji %s ready.", ij.getVersion())
 
         try:
@@ -166,10 +175,8 @@ def deconvolve_file(
 
     try:
         # '-out stack short' matches the MATLAB output type (uint16 ImagePlus).
-        # '-system' tells DL2 to write its progress log to stdout instead of
-        # opening a Swing monitor window — required for headless operation.
         result_imp = DL2.RL(imp_image, imp_psf, float(num_iter),
-                            "-out stack short -system")
+                            "-out stack short")
         if result_imp is None:
             raise RuntimeError(
                 f"DL2.RL returned null for {input_path.name} "
