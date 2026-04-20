@@ -29,7 +29,6 @@ from __future__ import annotations
 import atexit
 import logging
 import os
-import tempfile
 import threading
 from pathlib import Path
 
@@ -148,32 +147,30 @@ def _dispose_gateway() -> None:
         _IJ_GATEWAY = None
 
 
-def _open_as_imageplus(path: Path, IJ) -> "ij.ImagePlus":
-    """Open a TIFF as an ImagePlus with correct stack dimensions.
+def _numpy_to_imageplus(arr: np.ndarray, ij_gateway, title: str = "image"):
+    """Convert a (Z, Y, X) numpy array to an ImageJ1 ImagePlus.
 
-    TIFFs written by tifffile without ``imagej=True`` lack the metadata
-    that ``IJ.openImage`` needs to interpret a 3D array as a Z-stack.
-    This helper re-writes through tifffile with ``imagej=True`` to a temp
-    file so ``IJ.openImage`` always sees proper ImageJ-format metadata.
+    Uses PyImageJ's ``ij.py.to_imageplus()`` conversion, which constructs
+    the ImagePlus directly from array data without any file I/O or
+    display interaction. This works reliably in the ``interactive:force``
+    macOS CLI environment where ``IJ.openImage`` returns pixel-empty
+    ImagePlus objects.
     """
-    arr = tifffile.imread(str(path))
+    arr = np.asarray(arr)
     if arr.ndim == 2:
         arr = arr[np.newaxis, ...]
-
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".tif")
-    os.close(tmp_fd)
-    try:
-        tifffile.imwrite(tmp_path, arr, imagej=True, photometric="minisblack")
-        imp = IJ.openImage(tmp_path)
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-
+    imp = ij_gateway.py.to_imageplus(arr.astype(np.float32))
     if imp is None:
-        raise RuntimeError(f"IJ.openImage returned null for: {path}")
+        raise RuntimeError(f"ij.py.to_imageplus returned null for: {title}")
+    log.debug("Built ImagePlus '%s': %dx%dx%d slices",
+              title, imp.getWidth(), imp.getHeight(), imp.getStackSize())
     return imp
+
+
+def _load_as_imageplus(path: Path, ij_gateway):
+    """Read a TIFF with tifffile and convert to ImagePlus via PyImageJ."""
+    arr = tifffile.imread(str(path))
+    return _numpy_to_imageplus(arr, ij_gateway, title=path.name)
 
 
 def deconvolve_file(
@@ -185,19 +182,20 @@ def deconvolve_file(
 ) -> Path:
     """Deconvolve a single multi-page TIFF via ``DL2.RL``.
 
-    Reads ``input_path`` + ``psf_path`` via :func:`_open_as_imageplus`
-    (ensuring ImageJ-compatible metadata), runs ``DL2.RL(image, psf,
-    num_iter, '-out stack short')``, and saves the result with
-    ``IJ.saveAsTiff`` (uncompressed, uint16 — matching the MATLAB output).
+    Reads ``input_path`` + ``psf_path`` using tifffile + PyImageJ's
+    ``to_imageplus()`` — bypassing ``IJ.openImage`` entirely to avoid
+    the macOS ``interactive:force`` issue where that call returns a
+    pixel-empty ImagePlus. Runs ``DL2.RL`` and saves with
+    ``IJ.saveAsTiff`` (uncompressed, uint16 — matching MATLAB output).
     """
     input_path = Path(input_path)
     output_path = Path(output_path)
     psf_path = Path(psf_path)
 
-    _, DL2, IJ = _get_gateway(fiji_dir)
+    ij_gateway, DL2, IJ = _get_gateway(fiji_dir)
 
-    imp_image = _open_as_imageplus(input_path, IJ)
-    imp_psf = _open_as_imageplus(psf_path, IJ)
+    imp_image = _load_as_imageplus(input_path, ij_gateway)
+    imp_psf = _load_as_imageplus(psf_path, ij_gateway)
 
     try:
         # '-out stack short' matches the MATLAB output type (uint16 ImagePlus).
