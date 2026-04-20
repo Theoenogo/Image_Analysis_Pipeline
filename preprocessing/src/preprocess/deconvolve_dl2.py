@@ -100,16 +100,19 @@ def _get_gateway(fiji_dir: Path | str | None):
         resolved = _resolve_fiji_dir(fiji_dir)
         _verify_dl2_plugin(resolved)
 
-        # DL2 internally constructs AWT/Swing components (progress monitors,
-        # etc.) even for programmatic ``DL2.RL`` calls. PyImageJ's
-        # ``mode="headless"`` forces ``java.awt.headless=true``, which makes
-        # any AWT call throw ``HeadlessException``. ``mode="interactive"``
-        # starts the JVM with AWT enabled but doesn't pop the Fiji main
-        # window — good enough for DL2, as long as the user has a display
-        # (local Mac/Linux desktop). This will NOT work over an SSH session
-        # without X forwarding, or in a server/CI environment.
-        log.info("Starting Fiji JVM (interactive mode for DL2 AWT) from %s ...", resolved)
-        ij = imagej.init(str(resolved), mode="interactive")
+        # DL2 internally constructs AWT/Swing components even for programmatic
+        # DL2.RL calls, so the JVM must NOT be fully headless.
+        #
+        # On macOS, PyImageJ's mode="interactive" refuses to start when the
+        # CoreFoundation/AppKit event loop isn't already running (which it
+        # never is for a plain `python` CLI). mode="interactive:force" skips
+        # that guard while still initialising the JVM with AWT enabled, which
+        # is what DL2 needs. We pass `-system` to DL2.RL so it writes its
+        # progress to stdout instead of trying to open a Swing monitor window,
+        # meaning nothing tries to actually render to screen and the lack of
+        # an event loop never matters.
+        log.info("Starting Fiji JVM (interactive:force for DL2 AWT) from %s ...", resolved)
+        ij = imagej.init(str(resolved), mode="interactive:force")
         log.info("Fiji %s ready.", ij.getVersion())
 
         try:
@@ -175,8 +178,10 @@ def deconvolve_file(
 
     try:
         # '-out stack short' matches the MATLAB output type (uint16 ImagePlus).
+        # '-system' redirects DL2's progress log to stdout instead of opening
+        # a Swing monitor window — required when no event loop is running.
         result_imp = DL2.RL(imp_image, imp_psf, float(num_iter),
-                            "-out stack short")
+                            "-out stack short -system")
         if result_imp is None:
             raise RuntimeError(
                 f"DL2.RL returned null for {input_path.name} "
