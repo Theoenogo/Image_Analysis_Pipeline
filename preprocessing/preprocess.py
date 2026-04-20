@@ -251,14 +251,6 @@ def main() -> None:
         print(f"    GFP PSF: {args.gfp_psf}")
         print(f"    Cy  PSF: {args.cy_psf}")
 
-        # For the DL2 engine: pre-initialize the JVM on the main thread so
-        # the two channel workers share a single Fiji gateway. (JVM startup
-        # isn't thread-safe and can't be restarted; one gateway per
-        # process, used from multiple Java-backed threads.)
-        if config.engine == "dl2":
-            from preprocess.deconvolve_dl2 import _get_gateway  # noqa: WPS450
-            _get_gateway(config.fiji_dir)
-
         # Parallelize GFP + Cy5 unless the user asked for sequential, or
         # the engine is torch on a single GPU (where they'd just serialize
         # on the device anyway).

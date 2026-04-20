@@ -1,51 +1,32 @@
-"""DeconvolutionLab2 (Java) backend, called via PyImageJ.
+"""DeconvolutionLab2 backend — runs DL2 via Fiji CLI as a subprocess.
 
-Mirrors the original MATLAB pipeline verbatim — the same plugin, the same
-class, the same arguments::
+Mirrors the original MATLAB pipeline: same plugin, same algorithm, same
+``-out stack short`` output type. Instead of embedding the JVM inside
+the Python process (which fails on macOS due to AWT/AppKit constraints),
+this backend launches Fiji as a normal macOS/Linux application via
+``subprocess``, hands it a tiny ImageJ macro that calls DL2, and picks
+up the output TIFF when Fiji exits.
 
-    result = DL2.RL(image, psf, 30.0, '-out stack short')
-
-This backend is a thin PyImageJ bridge: it starts a single Fiji JVM per
-Python process in ``interactive`` mode (AWT enabled, no main window),
-resolves the ``DL2`` class from the ``DeconvolutionLab_2.jar`` plugin,
-and invokes ``DL2.RL(...)`` on each stack. Image I/O is handled by
-ImageJ itself (``IJ.openImage`` / ``IJ.saveAsTiff``), so there is no
-numpy <-> Java conversion step.
-
-**Display required.** DL2 internally constructs AWT/Swing components
-even for programmatic calls, so the JVM can't be fully headless. This
-engine works on a local Mac/Linux desktop but will NOT work in a
-server/CI/SSH-only environment without X forwarding. Use the ``scipy``
-or ``torch`` engines in those cases.
-
-Because the JVM cannot be restarted inside one process, the gateway is
-cached in a module global and reused. Separate ``DL2.RL`` calls on
-separate data are safe to run on multiple Java threads, which is what
-the CLI's channel-level parallelism relies on.
+Each ``deconvolve_file`` call spawns one Fiji process. Channel-level
+parallelism (GFP + Cy) is handled by the caller launching two
+``deconvolve_file`` calls concurrently — they run as separate OS
+processes with no shared JVM state.
 """
 
 from __future__ import annotations
 
-import atexit
 import logging
 import os
-import threading
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
-
-import numpy as np
-import tifffile
 
 log = logging.getLogger(__name__)
 
 
-_GATEWAY_LOCK = threading.Lock()
-_IJ_GATEWAY = None  # pyimagej gateway (initialized lazily)
-_DL2_CLASS = None
-_IJ_CLASS = None
-
-
 class DL2NotAvailableError(RuntimeError):
-    """Raised when the DL2 engine can't be loaded (missing Fiji/plugin/JVM)."""
+    """Raised when the DL2 engine can't be used (missing Fiji/plugin)."""
 
 
 def _resolve_fiji_dir(fiji_dir: Path | str | None) -> Path:
@@ -66,8 +47,24 @@ def _resolve_fiji_dir(fiji_dir: Path | str | None) -> Path:
     )
 
 
+def _find_fiji_launcher(fiji_dir: Path) -> Path:
+    """Locate the Fiji launcher executable for the current platform."""
+    candidates = [
+        fiji_dir / "Contents" / "MacOS" / "ImageJ-macosx",
+        fiji_dir / "ImageJ-linux64",
+        fiji_dir / "ImageJ-win64.exe",
+    ]
+    for c in candidates:
+        if c.is_file():
+            return c
+    raise DL2NotAvailableError(
+        f"Cannot find Fiji launcher in {fiji_dir}.\n"
+        f"Tried: {', '.join(c.name for c in candidates)}"
+    )
+
+
 def _verify_dl2_plugin(fiji_dir: Path) -> None:
-    """Sanity-check that DeconvolutionLab_2.jar is actually on the plugin path."""
+    """Sanity-check that DeconvolutionLab_2.jar is on the plugin path."""
     plugins = fiji_dir / "plugins"
     if not plugins.is_dir():
         raise DL2NotAvailableError(
@@ -84,95 +81,6 @@ def _verify_dl2_plugin(fiji_dir: Path) -> None:
         )
 
 
-def _get_gateway(fiji_dir: Path | str | None):
-    """Lazy-init a single shared PyImageJ gateway + DL2 / IJ class handles."""
-    global _IJ_GATEWAY, _DL2_CLASS, _IJ_CLASS
-    with _GATEWAY_LOCK:
-        if _IJ_GATEWAY is not None:
-            return _IJ_GATEWAY, _DL2_CLASS, _IJ_CLASS
-        try:
-            import imagej
-            import scyjava
-        except ImportError as err:
-            raise DL2NotAvailableError(
-                "The DL2 engine requires pyimagej and scyjava.\n"
-                "Install with: pip install pyimagej scyjava\n"
-                "You also need a JDK (e.g. `brew install openjdk` on macOS)."
-            ) from err
-
-        resolved = _resolve_fiji_dir(fiji_dir)
-        _verify_dl2_plugin(resolved)
-
-        # DL2 internally constructs AWT/Swing components even for programmatic
-        # DL2.RL calls, so the JVM must NOT be fully headless.
-        #
-        # On macOS, PyImageJ's mode="interactive" refuses to start when the
-        # CoreFoundation/AppKit event loop isn't already running (which it
-        # never is for a plain `python` CLI). mode="interactive:force" skips
-        # that guard while still initialising the JVM with AWT enabled, which
-        # is what DL2 needs. We pass `-system` to DL2.RL so it writes its
-        # progress to stdout instead of trying to open a Swing monitor window,
-        # meaning nothing tries to actually render to screen and the lack of
-        # an event loop never matters.
-        log.info("Starting Fiji JVM (interactive:force for DL2 AWT) from %s ...", resolved)
-        ij = imagej.init(str(resolved), mode="interactive:force")
-        log.info("Fiji %s ready.", ij.getVersion())
-
-        try:
-            DL2 = scyjava.jimport("DL2")
-        except Exception as err:
-            raise DL2NotAvailableError(
-                "Fiji started but the DL2 class could not be loaded. "
-                "Is DeconvolutionLab_2.jar in the plugins/ folder?"
-            ) from err
-
-        IJ = scyjava.jimport("ij.IJ")
-
-        _IJ_GATEWAY = ij
-        _DL2_CLASS = DL2
-        _IJ_CLASS = IJ
-
-        atexit.register(_dispose_gateway)
-        return ij, DL2, IJ
-
-
-def _dispose_gateway() -> None:
-    """Best-effort JVM shutdown on interpreter exit."""
-    global _IJ_GATEWAY
-    if _IJ_GATEWAY is not None:
-        try:
-            _IJ_GATEWAY.dispose()
-        except Exception:  # pragma: no cover — interpreter-shutdown path
-            pass
-        _IJ_GATEWAY = None
-
-
-def _numpy_to_imageplus(arr: np.ndarray, ij_gateway, title: str = "image"):
-    """Convert a (Z, Y, X) numpy array to an ImageJ1 ImagePlus.
-
-    Uses PyImageJ's ``ij.py.to_imageplus()`` conversion, which constructs
-    the ImagePlus directly from array data without any file I/O or
-    display interaction. This works reliably in the ``interactive:force``
-    macOS CLI environment where ``IJ.openImage`` returns pixel-empty
-    ImagePlus objects.
-    """
-    arr = np.asarray(arr)
-    if arr.ndim == 2:
-        arr = arr[np.newaxis, ...]
-    imp = ij_gateway.py.to_imageplus(arr.astype(np.float32))
-    if imp is None:
-        raise RuntimeError(f"ij.py.to_imageplus returned null for: {title}")
-    log.debug("Built ImagePlus '%s': %dx%dx%d slices",
-              title, imp.getWidth(), imp.getHeight(), imp.getStackSize())
-    return imp
-
-
-def _load_as_imageplus(path: Path, ij_gateway):
-    """Read a TIFF with tifffile and convert to ImagePlus via PyImageJ."""
-    arr = tifffile.imread(str(path))
-    return _numpy_to_imageplus(arr, ij_gateway, title=path.name)
-
-
 def deconvolve_file(
     input_path: Path,
     output_path: Path,
@@ -180,49 +88,81 @@ def deconvolve_file(
     num_iter: int,
     fiji_dir: Path | str | None = None,
 ) -> Path:
-    """Deconvolve a single multi-page TIFF via ``DL2.RL``.
+    """Deconvolve a single multi-page TIFF via Fiji CLI + DL2 macro.
 
-    Reads ``input_path`` + ``psf_path`` using tifffile + PyImageJ's
-    ``to_imageplus()`` — bypassing ``IJ.openImage`` entirely to avoid
-    the macOS ``interactive:force`` issue where that call returns a
-    pixel-empty ImagePlus. Runs ``DL2.RL`` and saves with
-    ``IJ.saveAsTiff`` (uncompressed, uint16 — matching MATLAB output).
+    Writes a temporary ImageJ macro that calls DL2's ``Run`` command,
+    launches Fiji as a subprocess, and picks up the output TIFF.
+    Fiji runs as a normal application (not headless) so DL2's internal
+    AWT/Swing components work without issue.
     """
-    input_path = Path(input_path)
-    output_path = Path(output_path)
-    psf_path = Path(psf_path)
+    input_path = Path(input_path).resolve()
+    output_path = Path(output_path).resolve()
+    psf_path = Path(psf_path).resolve()
 
-    ij_gateway, DL2, IJ = _get_gateway(fiji_dir)
+    resolved_fiji = _resolve_fiji_dir(fiji_dir)
+    _verify_dl2_plugin(resolved_fiji)
+    launcher = _find_fiji_launcher(resolved_fiji)
 
-    imp_image = _load_as_imageplus(input_path, ij_gateway)
-    imp_psf = _load_as_imageplus(psf_path, ij_gateway)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # DL2 Run command: -out stack short NAME writes NAME.tif in -path dir.
+    # Brackets around file paths handle spaces in directory names.
+    macro = (
+        f'setBatchMode(true);\n'
+        f'print("DL2 starting: {input_path.name}");\n'
+        f'run("DeconvolutionLab2 Run", '
+        f'"-image file [{input_path}] '
+        f'-psf file [{psf_path}] '
+        f'-algorithm RL {num_iter} '
+        f'-out stack short {output_path.stem} '
+        f'-path [{output_path.parent}]");\n'
+        f'print("DL2 finished: {input_path.name}");\n'
+        f'eval("script", "System.exit(0);");\n'
+    )
+
+    fd, macro_path = tempfile.mkstemp(suffix=".ijm")
     try:
-        # '-out stack short' matches the MATLAB output type (uint16 ImagePlus).
-        # '-system' redirects DL2's progress log to stdout instead of opening
-        # a Swing monitor window — required when no event loop is running.
-        result_imp = DL2.RL(imp_image, imp_psf, float(num_iter),
-                            "-out stack short -system")
-        if result_imp is None:
-            raise RuntimeError(
-                f"DL2.RL returned null for {input_path.name} "
-                "(check Fiji console; common causes: image/PSF dimensionality "
-                "mismatch, unreadable PSF)."
-            )
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        IJ.saveAsTiff(result_imp, str(output_path))
-        try:
-            result_imp.close()
-        except Exception:
-            pass
+        os.write(fd, macro.encode())
+        os.close(fd)
+
+        log.info("Running DL2 via Fiji CLI: %s", input_path.name)
+        result = subprocess.run(
+            [str(launcher), "-macro", macro_path],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+
+        if result.stdout:
+            for line in result.stdout.strip().splitlines():
+                log.debug("Fiji: %s", line)
+        if result.returncode != 0 and result.stderr:
+            for line in result.stderr.strip().splitlines():
+                log.warning("Fiji stderr: %s", line)
     finally:
         try:
-            imp_image.close()
-        except Exception:
-            pass
-        try:
-            imp_psf.close()
-        except Exception:
+            os.unlink(macro_path)
+        except OSError:
             pass
 
-    return output_path
+    if output_path.is_file():
+        return output_path
+
+    # DL2 may have saved without extension match — search for the stem
+    alt = output_path.parent / f"{output_path.stem}.tif"
+    if alt.is_file() and alt != output_path:
+        alt.rename(output_path)
+        return output_path
+
+    recent = sorted(
+        output_path.parent.glob("*.tif"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )[:10]
+    raise RuntimeError(
+        f"DL2 did not produce output at {output_path}.\n"
+        f"Return code: {result.returncode}\n"
+        f"Recent .tif in output dir: {[f.name for f in recent]}\n"
+        f"stdout: {(result.stdout or '(empty)')[-500:]}\n"
+        f"stderr: {(result.stderr or '(empty)')[-500:]}"
+    )
