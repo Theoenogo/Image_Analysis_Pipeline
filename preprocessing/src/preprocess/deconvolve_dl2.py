@@ -108,7 +108,6 @@ def deconvolve_file(
     # DL2 Run command: -out stack short NAME writes NAME.tif in -path dir.
     # Brackets around file paths handle spaces in directory names.
     macro = (
-        f'setBatchMode(true);\n'
         f'print("DL2 starting: {input_path.name}");\n'
         f'run("DeconvolutionLab2 Run", '
         f'"-image file [{input_path}] '
@@ -117,7 +116,6 @@ def deconvolve_file(
         f'-out stack short {output_path.stem} '
         f'-path [{output_path.parent}]");\n'
         f'print("DL2 finished: {input_path.name}");\n'
-        f'eval("script", "System.exit(0);");\n'
     )
 
     fd, macro_path = tempfile.mkstemp(suffix=".ijm")
@@ -127,7 +125,7 @@ def deconvolve_file(
 
         log.info("Running DL2 via Fiji CLI: %s", input_path.name)
         result = subprocess.run(
-            [str(launcher), "-macro", macro_path],
+            [str(launcher), "--headless", "-macro", macro_path],
             capture_output=True,
             text=True,
             timeout=600,
