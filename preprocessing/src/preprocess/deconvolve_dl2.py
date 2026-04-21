@@ -113,21 +113,42 @@ def deconvolve_file(
     # wrapping -path in [...] makes DL2 treat the brackets as literal
     # characters and the directory is reported as "(not-valid)", which
     # silently skips the output save. So -path must be bare.
-    # Macro ends with run("Quit") so Fiji exits after the deconvolution.
+    # NB: DL2's "Run" command dispatches the actual RL onto a background
+    # worker thread and returns to the macro immediately. If the macro
+    # calls run("Quit") right after, Fiji shuts down before the worker
+    # finishes and the output file is never written. So after kicking
+    # DL2 off we poll for the expected output TIFF (up to poll_seconds)
+    # and only quit once it exists. The outer subprocess timeout still
+    # bounds total wall-clock time.
+    poll_seconds = 580  # a bit under subprocess timeout (600s) so we
+                        # can log a clean timeout before Python kills us.
     img_title = "dl2_image"
     psf_title = "dl2_psf"
+    expected_output = output_path.parent / f"{output_path.stem}.tif"
     macro = (
         f'print("DL2 starting: {input_path.name}");\n'
         f'open("{input_path}");\n'
         f'rename("{img_title}");\n'
         f'open("{psf_path}");\n'
         f'rename("{psf_title}");\n'
+        f'outFile = "{expected_output}";\n'
         f'run("DeconvolutionLab2 Run", '
         f'"-image platform {img_title} '
         f'-psf platform {psf_title} '
         f'-algorithm RL {num_iter} '
         f'-out stack short {output_path.stem} '
         f'-path {output_path.parent}");\n'
+        f'print("DL2 Run returned to macro, waiting for output file");\n'
+        f'waited = 0;\n'
+        f'while (!File.exists(outFile) && waited < {poll_seconds}) {{\n'
+        f'    wait(1000);\n'
+        f'    waited = waited + 1;\n'
+        f'}}\n'
+        f'if (File.exists(outFile)) {{\n'
+        f'    print("DL2 output appeared after " + waited + "s: " + outFile);\n'
+        f'}} else {{\n'
+        f'    print("DL2 output never appeared, gave up after " + waited + "s");\n'
+        f'}}\n'
         f'print("DL2 finished: {input_path.name}");\n'
         f'run("Quit");\n'
     )
