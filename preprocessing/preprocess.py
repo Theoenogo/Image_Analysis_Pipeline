@@ -58,6 +58,7 @@ from preprocess import (  # noqa: E402
     deconvolve_channel,
     rename_channel_folders,
     stack_channel_folders,
+    zero_pad_channel_folders,
 )
 from preprocess.deconvolve import DeconvolutionConfig  # noqa: E402
 from preprocess.stacking import DEFAULT_GFP_OFFSET  # noqa: E402
@@ -209,9 +210,11 @@ def main() -> None:
     if not args.skip_cleanup:
         print(">>> Step 1: Cleaning up folders & deleting .scanprotocol files")
         renamed = rename_channel_folders(main_folder)
+        padded = zero_pad_channel_folders(main_folder)
         deleted = delete_scan_protocol_files(main_folder)
-        print(f"    Renamed {renamed} channel folder(s). Deleted {deleted} "
-              f".scanprotocol file(s).\n")
+        print(f"    Renamed {renamed} channel folder(s). "
+              f"Zero-padded {padded} folder(s). "
+              f"Deleted {deleted} .scanprotocol file(s).\n")
     else:
         print(">>> Step 1: SKIPPED (--skip-cleanup)\n")
 

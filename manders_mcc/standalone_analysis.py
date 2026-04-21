@@ -21,6 +21,7 @@ Output:
 """
 
 import os
+import re
 import sys
 import csv
 import argparse
@@ -174,11 +175,18 @@ def get_num(filename, prefix):
         return s
 
 
+def _numeric_sort_key(name):
+    """Sort key: extract first digit run as int for natural ordering."""
+    m = re.search(r"(\d+)", name)
+    return (int(m.group(1)) if m else 10**9, name.lower())
+
+
 def get_files(folder, prefix):
-    """Get sorted list of TIFF files with given prefix."""
+    """Get numerically sorted list of TIFF files with given prefix."""
     return sorted([f for f in os.listdir(folder)
                    if f.lower().endswith(('.tif', '.tiff'))
-                   and f.lower().startswith(prefix.lower())])
+                   and f.lower().startswith(prefix.lower())],
+                  key=_numeric_sort_key)
 
 
 def load_stack(filepath):

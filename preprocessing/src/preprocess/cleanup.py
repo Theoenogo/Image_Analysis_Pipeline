@@ -2,6 +2,8 @@
 
 - ``rename_channel_folders`` mirrors ``A_renameFolders_v2.m``: renames
   microscope-output folders like ``gfp1.abc123`` to just ``gfp1``.
+- ``zero_pad_channel_folders`` normalizes numbers in channel folder
+  names to two-digit zero-padded form (``gfp1`` → ``gfp01``).
 - ``delete_scan_protocol_files`` mirrors ``B_deleteScanProtocolFiles.m``:
   recursively removes ``*.scanprotocol`` sidecar files that otherwise
   interfere with folder iteration.
@@ -23,6 +25,10 @@ _CHANNEL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^gfp\d+\.[\dA-Za-z_-]+$", re.IGNORECASE),
     re.compile(r"^cy\d+\.[\dA-Za-z_-]+$", re.IGNORECASE),
     re.compile(r"^rfp\d+\.[\dA-Za-z_-]+$", re.IGNORECASE),
+)
+
+_CHANNEL_NUMBER_RE = re.compile(
+    r"^(gfp|cy|rfp)(\d+)$", re.IGNORECASE
 )
 
 
@@ -61,6 +67,44 @@ def rename_channel_folders(main_folder: Path) -> int:
         path.rename(target)
         renamed += 1
         log.info("Renamed %s -> %s", path, target)
+    return renamed
+
+
+def zero_pad_channel_folders(main_folder: Path, width: int = 2) -> int:
+    """Normalize channel folder numbers to zero-padded form.
+
+    Renames ``gfp1`` → ``gfp01``, ``cy2`` → ``cy02``, etc. Folders
+    whose number is already at least ``width`` digits are left alone
+    (``gfp01`` stays ``gfp01``, ``gfp100`` stays ``gfp100``).
+
+    Returns the number of folders renamed.
+    """
+    main_folder = Path(main_folder)
+    if not main_folder.is_dir():
+        raise NotADirectoryError(main_folder)
+
+    to_rename: list[tuple[Path, str]] = []
+    for path in main_folder.rglob("*"):
+        if not path.is_dir():
+            continue
+        m = _CHANNEL_NUMBER_RE.match(path.name)
+        if not m:
+            continue
+        prefix, digits = m.group(1), m.group(2)
+        if len(digits) >= width:
+            continue
+        new_name = f"{prefix}{int(digits):0{width}d}"
+        to_rename.append((path, new_name))
+
+    renamed = 0
+    for path, new_name in sorted(to_rename, key=lambda t: len(t[0].parts), reverse=True):
+        target = path.parent / new_name
+        if target.exists():
+            log.warning("Cannot rename %s -> %s: target already exists", path, target)
+            continue
+        path.rename(target)
+        renamed += 1
+        log.info("Zero-padded %s -> %s", path.name, new_name)
     return renamed
 
 

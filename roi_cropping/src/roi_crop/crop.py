@@ -15,10 +15,10 @@ Per-sample input layout (produced by ``preprocessing/`` + the manual ImageJ
 Output layout::
 
     <sample>/Cropped/
-        gfp/gfp1.tif, gfp2.tif, ...  ← one stack per ROI (sequential)
-        cy/cy1.tif, cy2.tif, ...     ← matched 1:1
-        roi/1.roi, 2.roi, ...        ← per-cell ROI in bbox-local coords
-        roi.zip                      ← combined zip of all per-cell ROIs
+        gfp/gfp01.tif, gfp02.tif, ...  ← one stack per ROI (sequential)
+        cy/cy01.tif, cy02.tif, ...      ← matched 1:1
+        roi/01.roi, 02.roi, ...         ← per-cell ROI in bbox-local coords
+        roi.zip                         ← combined zip of all per-cell ROIs
 
 Cropping reproduces the ImageJ ``Duplicate (with ROI)`` + ``Make Inverse``
 + ``Clear stack`` behavior: the output is the tight bounding box of the
@@ -243,9 +243,9 @@ def crop_pair_with_rois(
             gfp_crop[:, outside] = 0
             cy_crop[:, outside] = 0
 
-        gfp_out = out_gfp_dir / f"{gfp_prefix}{idx}.tif"
-        cy_out = out_cy_dir / f"{cy_prefix}{idx}.tif"
-        roi_out = out_roi_dir / f"{idx}.roi"
+        gfp_out = out_gfp_dir / f"{gfp_prefix}{idx:02d}.tif"
+        cy_out = out_cy_dir / f"{cy_prefix}{idx:02d}.tif"
+        roi_out = out_roi_dir / f"{idx:02d}.roi"
 
         # Preserve dtype of the source stack (matches the decon output, uint16).
         _save_stack(gfp_out, gfp_crop, gfp_stack.dtype)

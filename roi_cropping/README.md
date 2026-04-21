@@ -62,22 +62,22 @@ sample. This handles the nested
 ```
 <sample>/Cropped/
     gfp/
-        gfp1.tif        ← single-cell stack, ROI-shaped, all-zero outside
-        gfp2.tif
+        gfp01.tif       ← single-cell stack, ROI-shaped, all-zero outside
+        gfp02.tif
         ...
     cy/
-        cy1.tif
-        cy2.tif
+        cy01.tif
+        cy02.tif
         ...
     roi/
-        1.roi           ← per-cell ROI in bbox-local coords
-        2.roi
+        01.roi          ← per-cell ROI in bbox-local coords
+        02.roi
         ...
     roi.zip             ← combined zip in image-paired order (single ROI per cell)
 ```
 
 Numbering is sequential across all FOVs in the sample: 4 ROIs in pair
-01 + 3 ROIs in pair 02 yields `gfp1.tif … gfp7.tif`. The combined
+01 + 3 ROIs in pair 02 yields `gfp01.tif … gfp07.tif`. The combined
 `roi.zip` enumerates ROIs in the same order, so downstream stages can
 pair `gfpN.tif`/`cyN.tif` with the Nth ROI directly.
 

@@ -11,13 +11,14 @@ The original MATLAB scripts live in ``preprocessing/matlab_reference/`` for
 reference.
 """
 
-from .cleanup import delete_scan_protocol_files, rename_channel_folders
+from .cleanup import delete_scan_protocol_files, rename_channel_folders, zero_pad_channel_folders
 from .consolidate import consolidate_decon_folders
 from .deconvolve import deconvolve_channel, richardson_lucy
 from .stacking import stack_channel_folders
 
 __all__ = [
     "rename_channel_folders",
+    "zero_pad_channel_folders",
     "delete_scan_protocol_files",
     "stack_channel_folders",
     "consolidate_decon_folders",
