@@ -104,19 +104,26 @@ def deconvolve_file(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # DL2 Run command: -out stack short NAME writes NAME.tif in -path dir.
-    # Brackets around file paths handle spaces in directory names.
-    # -path takes a plain directory string (no brackets; DL2 only handles
-    # bracket-quoting for the -image / -psf file arguments).
+    # Load image + PSF via ImageJ's own opener, then hand them to DL2
+    # by title using '-image platform' / '-psf platform'. DL2's built-in
+    # '-image file ...' opener rejects some ImageJ-hyperstack TIFFs with
+    # "Image: Not valid", but IJ.openImage() handles them fine.
+    # -out stack short NAME writes NAME.tif (uint16) into -path dir.
     # Macro ends with run("Quit") so Fiji exits after the deconvolution.
+    img_title = "dl2_image"
+    psf_title = "dl2_psf"
     macro = (
         f'print("DL2 starting: {input_path.name}");\n'
+        f'open("{input_path}");\n'
+        f'rename("{img_title}");\n'
+        f'open("{psf_path}");\n'
+        f'rename("{psf_title}");\n'
         f'run("DeconvolutionLab2 Run", '
-        f'"-image file [{input_path}] '
-        f'-psf file [{psf_path}] '
+        f'"-image platform {img_title} '
+        f'-psf platform {psf_title} '
         f'-algorithm RL {num_iter} '
         f'-out stack short {output_path.stem} '
-        f'-path {output_path.parent}");\n'
+        f'-path [{output_path.parent}]");\n'
         f'print("DL2 finished: {input_path.name}");\n'
         f'run("Quit");\n'
     )
