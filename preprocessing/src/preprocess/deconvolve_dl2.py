@@ -109,6 +109,10 @@ def deconvolve_file(
     # '-image file ...' opener rejects some ImageJ-hyperstack TIFFs with
     # "Image: Not valid", but IJ.openImage() handles them fine.
     # -out stack short NAME writes NAME.tif (uint16) into -path dir.
+    # NB: DL2 only strips bracket-quoting from its -image/-psf file args;
+    # wrapping -path in [...] makes DL2 treat the brackets as literal
+    # characters and the directory is reported as "(not-valid)", which
+    # silently skips the output save. So -path must be bare.
     # Macro ends with run("Quit") so Fiji exits after the deconvolution.
     img_title = "dl2_image"
     psf_title = "dl2_psf"
@@ -123,7 +127,7 @@ def deconvolve_file(
         f'-psf platform {psf_title} '
         f'-algorithm RL {num_iter} '
         f'-out stack short {output_path.stem} '
-        f'-path [{output_path.parent}]");\n'
+        f'-path {output_path.parent}");\n'
         f'print("DL2 finished: {input_path.name}");\n'
         f'run("Quit");\n'
     )
