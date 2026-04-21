@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
@@ -130,17 +129,13 @@ def deconvolve_file(
 
         log.info("Running DL2 via Fiji CLI: %s", input_path.name)
 
-        if sys.platform == "darwin":
-            # macOS: DL2 hardcodes a JFrame in Deconvolution.deconvolve(),
-            # so the JVM can't be headless. Launching via 'open -W -a'
-            # gives Fiji a proper macOS app context with display access.
-            # A brief Fiji window will appear during each deconvolution.
-            cmd = [
-                "open", "-W", "-a", str(resolved_fiji),
-                "--args", "-macro", macro_path,
-            ]
-        else:
-            cmd = [str(launcher), "-macro", macro_path]
+        # DL2 hardcodes a JFrame in Deconvolution.deconvolve(), so Fiji
+        # cannot run with --headless — the plugin always throws
+        # HeadlessException. Launch the Fiji launcher binary directly so
+        # AWT is available; on macOS a subprocess spawned from a GUI
+        # terminal session inherits display access, so a brief Fiji
+        # window appears per deconvolution but the macro quits on its own.
+        cmd = [str(launcher), "-macro", macro_path]
 
         result = subprocess.run(
             cmd,
