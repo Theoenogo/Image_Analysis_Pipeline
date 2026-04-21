@@ -14,6 +14,7 @@ Matches the MATLAB behavior from
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +26,8 @@ log = logging.getLogger(__name__)
 # Default XY offset applied to GFP in the MATLAB pipeline.
 # Positive x shifts the image right; positive y shifts down.
 DEFAULT_GFP_OFFSET: tuple[int, int] = (5, -2)
+
+_CHANNEL_NUM_RE = re.compile(r"^([A-Za-z]+)(\d+)$")
 
 
 def _apply_xy_offset(image: np.ndarray, xy_offset: tuple[int, int]) -> np.ndarray:
@@ -68,8 +71,13 @@ def _read_slices(folder: Path) -> tuple[list[np.ndarray], list[Path]]:
         key=lambda p: p.name.lower(),
     )
     # Exclude the folder-named output file if it already exists (re-run safety).
-    output_name = f"{folder.name}.tif"
-    candidates = [p for p in candidates if p.name != output_name]
+    # Check both the raw folder name and the zero-padded variant.
+    exclude = {f"{folder.name}.tif"}
+    m = _CHANNEL_NUM_RE.match(folder.name)
+    if m:
+        prefix, digits = m.group(1), m.group(2)
+        exclude.add(f"{prefix}{int(digits):02d}.tif")
+    candidates = [p for p in candidates if p.name not in exclude]
 
     slices: list[np.ndarray] = []
     used: list[Path] = []
@@ -115,8 +123,14 @@ def _process_channel_folder(
     if xy_offset is not None:
         slices = [_apply_xy_offset(img, xy_offset) for img in slices]
 
-    # Write the stack into the channel folder, then move it into Decon/<group>/.
-    output_name = f"{channel_folder.name}.tif"
+    # Zero-pad the channel number in the output filename so gfp1 → gfp01.tif.
+    folder_name = channel_folder.name
+    m = _CHANNEL_NUM_RE.match(folder_name)
+    if m:
+        prefix, digits = m.group(1), m.group(2)
+        if len(digits) < 2:
+            folder_name = f"{prefix}{int(digits):02d}"
+    output_name = f"{folder_name}.tif"
     temp_output = channel_folder / output_name
     _save_stack_uint16(temp_output, slices)
 
