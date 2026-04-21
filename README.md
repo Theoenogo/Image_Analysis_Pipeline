@@ -35,17 +35,36 @@ cd Image_Analysis_Pipeline
 ```
 
 **2. Create a virtual environment**
+
+macOS / Linux:
 ```bash
 python3.12 -m venv venv
 source venv/bin/activate
 ```
 
-**3. Install dependencies**
-```bash
-python3.12 -m pip install -r requirements.txt
+Windows (PowerShell):
+```powershell
+py -3.12 -m venv venv
+venv\Scripts\Activate.ps1
 ```
 
-> Activate the virtual environment (`source venv/bin/activate`) at the start of every session before running any scripts.
+Windows (Command Prompt):
+```cmd
+py -3.12 -m venv venv
+venv\Scripts\activate.bat
+```
+
+> If PowerShell blocks the activate script, run
+> `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once and retry.
+
+**3. Install dependencies**
+```bash
+python -m pip install -r requirements.txt
+```
+
+> Activate the virtual environment at the start of every session before
+> running any scripts (macOS/Linux: `source venv/bin/activate`,
+> Windows PowerShell: `venv\Scripts\Activate.ps1`).
 
 ---
 

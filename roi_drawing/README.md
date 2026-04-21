@@ -42,10 +42,18 @@ Output files per image pair:
 pip install -r requirements.txt
 ```
 
-First run will download the Cellpose `cyto3` model weights (~25 MB). On
-Linux you may also need `sudo apt install python3-tk` for the folder/file
-pickers — the script falls back to text prompts if tkinter isn't
-available.
+First run will download the Cellpose `cyto3` model weights (~25 MB).
+
+**Platform notes:**
+- **Linux**: you may need `sudo apt install python3-tk` for the
+  folder/file pickers. The script falls back to text prompts if
+  tkinter isn't available.
+- **Windows**: tkinter is included with the standard Python installer.
+  If you used the Microsoft Store Python, tkinter should already be
+  available. All file paths use `pathlib` internally, so backslash
+  paths work as expected.
+- **macOS**: tkinter ships with the python.org installer and
+  Homebrew Python.
 
 A GPU is optional but speeds Cellpose up considerably. Pass `--no-gpu` to
 force CPU mode.

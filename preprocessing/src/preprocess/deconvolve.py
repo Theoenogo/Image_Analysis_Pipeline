@@ -21,6 +21,7 @@ available.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
@@ -42,6 +43,67 @@ class DeconvolutionConfig:
     engine: Engine = "dl2"
     torch_device: TorchDevice = "mps"
     fiji_dir: Optional[Path] = None  # only used when engine == "dl2"
+    crop_psf: bool = True
+    psf_crop_margin: int = 30
+
+
+# ---------------------------------------------------------------------------
+# PSF auto-crop
+# ---------------------------------------------------------------------------
+
+
+def _autocrop_psf(
+    psf: np.ndarray,
+    margin: int = 30,
+    threshold_frac: float = 0.001,
+) -> np.ndarray:
+    """Crop a PSF to its signal bounding box plus *margin* pixels per side.
+
+    Measured PSFs are often captured at full sensor resolution but contain
+    signal in a small central region. Cropping removes the vast black
+    border so FFT-based deconvolution operates on a much smaller volume.
+
+    *threshold_frac* is the fraction of the PSF max used to distinguish
+    signal from background. 0.1% is conservative enough to preserve faint
+    outer diffraction rings while ignoring camera dark-current noise.
+    """
+    peak = float(psf.max())
+    if peak <= 0:
+        log.warning("PSF max is <= 0; skipping auto-crop")
+        return psf
+
+    threshold = peak * threshold_frac
+    nonzero = np.argwhere(psf > threshold)
+    if nonzero.size == 0:
+        log.warning("No PSF pixels above %.3f%% of max; skipping auto-crop",
+                     threshold_frac * 100)
+        return psf
+
+    mins = nonzero.min(axis=0)
+    maxs = nonzero.max(axis=0)
+
+    slices = []
+    for dim in range(psf.ndim):
+        lo = max(0, int(mins[dim]) - margin)
+        hi = min(psf.shape[dim], int(maxs[dim]) + margin + 1)
+        slices.append(slice(lo, hi))
+
+    cropped = psf[tuple(slices)].copy()
+    old_shape = "x".join(str(s) for s in psf.shape)
+    new_shape = "x".join(str(s) for s in cropped.shape)
+    log.info("Auto-cropped PSF from %s to %s (margin=%d, threshold=%.1f%% of max)",
+             old_shape, new_shape, margin, threshold_frac * 100)
+    return cropped
+
+
+def _save_cropped_psf(psf: np.ndarray, suffix: str = "") -> Path:
+    """Write a cropped PSF to a temp file and return its path."""
+    import tempfile
+    fd, path = tempfile.mkstemp(suffix=f"_psf{suffix}.tif")
+    os.close(fd)
+    tifffile.imwrite(path, psf.astype(np.uint16), imagej=True,
+                     photometric="minisblack")
+    return Path(path)
 
 
 # ---------------------------------------------------------------------------
@@ -307,27 +369,52 @@ def deconvolve_channel(
 
     outputs: list[Path] = []
 
-    if config.engine == "dl2":
-        # DL2 handles its own I/O via ImageJ — no numpy loading on our side.
-        from .deconvolve_dl2 import deconvolve_file as _dl2_deconvolve_file
-        for input_path, output_path in jobs:
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            log.info("Deconvolving (DL2) %s", input_path)
-            _dl2_deconvolve_file(
-                input_path, output_path, psf_path,
-                num_iter=config.num_iter,
-                fiji_dir=config.fiji_dir,
-            )
-            outputs.append(output_path)
-            log.info("Wrote %s", output_path)
-    else:
-        psf = _load_tiff_stack(psf_path)
-        log.info("Loaded PSF %s with shape %s", psf_path, psf.shape)
-        for input_path, output_path in jobs:
-            log.info("Deconvolving (%s) %s", config.engine, input_path)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            _deconvolve_file_python(input_path, output_path, psf, config)
-            outputs.append(output_path)
-            log.info("Wrote %s", output_path)
+    # --- PSF auto-crop (benefits all engines) ---
+    effective_psf_path = psf_path
+    cropped_psf_tmp: Path | None = None
+    cropped_psf_arr: np.ndarray | None = None
+
+    if config.crop_psf:
+        raw_psf = _load_tiff_stack(psf_path)
+        cropped = _autocrop_psf(raw_psf, margin=config.psf_crop_margin)
+        if cropped.shape != raw_psf.shape:
+            if config.engine == "dl2":
+                cropped_psf_tmp = _save_cropped_psf(
+                    cropped, suffix=f"_{channel_group}")
+                effective_psf_path = cropped_psf_tmp
+            else:
+                cropped_psf_arr = cropped
+        else:
+            if config.engine != "dl2":
+                cropped_psf_arr = raw_psf
+
+    try:
+        if config.engine == "dl2":
+            from .deconvolve_dl2 import deconvolve_file as _dl2_deconvolve_file
+            for input_path, output_path in jobs:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                log.info("Deconvolving (DL2) %s", input_path)
+                _dl2_deconvolve_file(
+                    input_path, output_path, effective_psf_path,
+                    num_iter=config.num_iter,
+                    fiji_dir=config.fiji_dir,
+                )
+                outputs.append(output_path)
+                log.info("Wrote %s", output_path)
+        else:
+            psf = cropped_psf_arr if cropped_psf_arr is not None else _load_tiff_stack(psf_path)
+            log.info("Loaded PSF %s with shape %s", psf_path, psf.shape)
+            for input_path, output_path in jobs:
+                log.info("Deconvolving (%s) %s", config.engine, input_path)
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                _deconvolve_file_python(input_path, output_path, psf, config)
+                outputs.append(output_path)
+                log.info("Wrote %s", output_path)
+    finally:
+        if cropped_psf_tmp is not None:
+            try:
+                cropped_psf_tmp.unlink()
+            except OSError:
+                pass
 
     return outputs

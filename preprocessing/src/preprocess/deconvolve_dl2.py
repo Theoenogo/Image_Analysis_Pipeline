@@ -102,6 +102,11 @@ def deconvolve_file(
     _verify_dl2_plugin(resolved_fiji)
     launcher = _find_fiji_launcher(resolved_fiji)
 
+    # ImageJ macros use forward slashes on all platforms. Windows
+    # backslashes inside macro strings break path parsing.
+    def _macro_path(p: Path) -> str:
+        return str(p).replace("\\", "/")
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Load image + PSF via ImageJ's own opener, then hand them to DL2
@@ -125,19 +130,23 @@ def deconvolve_file(
     img_title = "dl2_image"
     psf_title = "dl2_psf"
     expected_output = output_path.parent / f"{output_path.stem}.tif"
+    m_input = _macro_path(input_path)
+    m_psf = _macro_path(psf_path)
+    m_outfile = _macro_path(expected_output)
+    m_outdir = _macro_path(output_path.parent)
     macro = (
         f'print("DL2 starting: {input_path.name}");\n'
-        f'open("{input_path}");\n'
+        f'open("{m_input}");\n'
         f'rename("{img_title}");\n'
-        f'open("{psf_path}");\n'
+        f'open("{m_psf}");\n'
         f'rename("{psf_title}");\n'
-        f'outFile = "{expected_output}";\n'
+        f'outFile = "{m_outfile}";\n'
         f'run("DeconvolutionLab2 Run", '
         f'"-image platform {img_title} '
         f'-psf platform {psf_title} '
         f'-algorithm RL {num_iter} '
         f'-out stack short {output_path.stem} '
-        f'-path {output_path.parent}");\n'
+        f'-path {m_outdir}");\n'
         f'print("DL2 Run returned to macro, waiting for output file");\n'
         f'waited = 0;\n'
         f'while (!File.exists(outFile) && waited < {poll_seconds}) {{\n'

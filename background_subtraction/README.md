@@ -54,6 +54,8 @@ The output layout is exactly what `manders_mcc/` reads from next.
 
 All dependencies come from the repo-root `requirements.txt`.
 
+Works on macOS, Linux, and Windows without platform-specific setup.
+
 ## Usage
 
 ```bash

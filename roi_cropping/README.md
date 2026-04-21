@@ -86,6 +86,8 @@ pair `gfpN.tif`/`cyN.tif` with the Nth ROI directly.
 All dependencies come from the repo-root `requirements.txt`. The
 relevant packages are `tifffile`, `roifile`, `scikit-image`, `numpy`.
 
+Works on macOS, Linux, and Windows without platform-specific setup.
+
 ## Usage
 
 ```bash

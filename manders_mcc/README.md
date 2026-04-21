@@ -42,10 +42,20 @@ Files are paired by number: `gfp1.tif` matches `cy1.tif`, etc.
 
 ### Terminal (standalone script -- recommended for large datasets)
 
+macOS / Linux:
 ```bash
 pip install numpy tifffile
 python standalone_analysis.py /path/to/Background_Subtracted
 ```
+
+Windows:
+```powershell
+pip install numpy tifffile
+python standalone_analysis.py C:\path\to\Background_Subtracted
+```
+
+Both scripts are pure Python and work identically on macOS, Linux,
+and Windows.
 
 ## Output files
 

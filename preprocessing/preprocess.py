@@ -128,6 +128,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Torch device when --engine=torch (default: mps for Apple Silicon).",
     )
     p.add_argument(
+        "--no-crop-psf",
+        action="store_true",
+        help="Disable automatic PSF cropping. By default the PSF is "
+        "cropped to its signal bounding box (+ margin) before "
+        "deconvolution, which dramatically speeds up large PSFs.",
+    )
+    p.add_argument(
+        "--psf-crop-margin",
+        type=int,
+        default=30,
+        help="Pixel margin around the PSF signal when auto-cropping "
+        "(default: 30). Ignored if --no-crop-psf is set.",
+    )
+    p.add_argument(
         "--sequential-channels",
         action="store_true",
         help="Deconvolve GFP then Cy sequentially. By default they run "
@@ -235,6 +249,8 @@ def main() -> None:
             engine=args.engine,
             torch_device=args.torch_device,
             fiji_dir=args.fiji_dir,
+            crop_psf=not args.no_crop_psf,
+            psf_crop_margin=args.psf_crop_margin,
         )
         decon_folder = main_folder / "Decon"
         if not decon_folder.is_dir():

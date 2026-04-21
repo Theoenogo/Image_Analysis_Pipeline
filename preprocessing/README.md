@@ -117,20 +117,24 @@ All dependencies come from the repo-root `requirements.txt`.
 The default `dl2` engine matches the original MATLAB pipeline
 bit-for-bit and requires:
 
-- **A JDK (Java 8+)** — e.g. `brew install openjdk` on macOS,
-  `sudo apt install default-jdk` on Ubuntu.
+- **A JDK (Java 8+)**:
+  - macOS: `brew install openjdk`
+  - Ubuntu/Debian: `sudo apt install default-jdk`
+  - Windows: download from <https://adoptium.net/> (Temurin JDK),
+    run the `.msi` installer, and make sure "Set JAVA_HOME" is
+    checked during install.
 - **Fiji** with the **DeconvolutionLab2** plugin installed:
-  1. Download Fiji: <https://imagej.net/software/fiji/downloads>
+  1. Download Fiji for your platform: <https://imagej.net/software/fiji/downloads>
   2. Open Fiji → `Help → Update... → Manage Update Sites`
   3. Enable **DeconvolutionLab2**, then click `Apply and Close`
   4. Click `Apply changes` in the updater.
-- **PyImageJ + scyjava**: `pip install pyimagej scyjava` (already in
-  `requirements.txt`).
-- **A display**: the JVM runs in `interactive` mode (no Fiji main
-  window, but AWT enabled) because DL2 internally constructs Swing
-  components even for programmatic calls. Works on a local
-  Mac/Linux desktop; will NOT work over SSH-without-X-forwarding or
-  in a server/CI environment.
+  5. On Windows, extract the Fiji `.zip` to a short path like
+     `C:\Fiji.app` (long paths with spaces can cause issues with
+     DL2's internal path handling).
+- **A display**: DL2 internally constructs Swing/AWT components even
+  for programmatic calls, so it cannot run truly headless. Works on
+  any local desktop (macOS, Linux, Windows). Will NOT work over
+  SSH-without-X-forwarding or in a headless server/CI environment.
 
 If you're running headless (server, SSH-only) or just don't want a
 Fiji/JDK install, use the pure-Python fallback — `--engine scipy` needs
@@ -143,17 +147,44 @@ CUDA on NVIDIA), use `--engine torch` after:
 pip install torch
 ```
 
-Point the CLI at your Fiji with `--fiji-dir /path/to/Fiji.app` or export
-`FIJI_DIR` in your shell profile.
+Point the CLI at your Fiji installation:
+
+macOS:
+```bash
+--fiji-dir /Applications/Fiji.app
+# or: export FIJI_DIR=/Applications/Fiji.app
+```
+
+Windows:
+```powershell
+--fiji-dir C:\Fiji.app
+# or: $env:FIJI_DIR = "C:\Fiji.app"
+```
+
+Linux:
+```bash
+--fiji-dir ~/Fiji.app
+# or: export FIJI_DIR=~/Fiji.app
+```
 
 ## Usage
 
+macOS / Linux:
 ```bash
 python preprocess.py \
     --input-dir /path/to/main_folder \
     --gfp-psf   /path/to/gfp_psf.tif \
     --cy-psf    /path/to/cy_psf.tif \
     --fiji-dir  /Applications/Fiji.app
+```
+
+Windows:
+```powershell
+python preprocess.py `
+    --input-dir C:\path\to\main_folder `
+    --gfp-psf   C:\path\to\gfp_psf.tif `
+    --cy-psf    C:\path\to\cy_psf.tif `
+    --fiji-dir  C:\Fiji.app
 ```
 
 GFP and Cy deconvolution run **concurrently** by default — the script
@@ -178,6 +209,13 @@ pipeline. Pass `--sequential-channels` to disable.
   Also reads `$FIJI_DIR` from the environment.
 - `--torch-device cpu|mps|cuda` — only used with `--engine torch`;
   default `mps`.
+- `--no-crop-psf` — disable automatic PSF cropping. By default the PSF
+  is cropped to its signal bounding box (+ 30 px margin) before
+  deconvolution. This is safe and dramatically speeds up large PSFs
+  captured at full sensor resolution (e.g. 1328×1048 → ~60×60).
+- `--psf-crop-margin N` — pixel margin around the PSF signal region
+  when auto-cropping (default `30`). Increase if you want to preserve
+  more of the outer diffraction rings.
 - `--sequential-channels` — run GFP then Cy back-to-back instead of
   concurrently. Useful for debugging or on very memory-constrained
   machines.
@@ -196,6 +234,28 @@ pipeline. Pass `--sequential-channels` to disable.
 ```bash
 python preprocess.py --input-dir ... --gfp-psf ... --cy-psf ... \
     --engine torch --torch-device mps
+```
+
+### Windows
+
+- Install a 64-bit JDK from <https://adoptium.net/> (Temurin). Check
+  "Set JAVA_HOME" during install. Verify with `java -version` in
+  PowerShell.
+- Download the Windows `.zip` of Fiji from <https://imagej.net/software/fiji/downloads>,
+  extract to a short path like `C:\Fiji.app`. The launcher is
+  `ImageJ-win64.exe` inside that directory.
+- Install DL2 in Fiji the same way as on Mac (Help → Update →
+  Manage Update Sites → DeconvolutionLab2).
+- Use `--fiji-dir C:\Fiji.app` or set `$env:FIJI_DIR = "C:\Fiji.app"`
+  in your PowerShell profile.
+- The `scipy` engine needs no extra setup and is the easiest way to
+  get started on Windows.
+- For GPU-accelerated Python RL via CUDA:
+
+```powershell
+pip install torch
+python preprocess.py --input-dir ... --gfp-psf ... --cy-psf ... `
+    --engine torch --torch-device cuda
 ```
 
 ### Example: re-deconvolve only
