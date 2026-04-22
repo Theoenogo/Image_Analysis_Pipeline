@@ -246,17 +246,89 @@ def discover_sample_folders(
     return sorted(samples)
 
 
+def _measure_direct(
+    channel_dir: Path,
+    roi_zip_path: Path,
+    channel_name: str,
+) -> Path | None:
+    """Direct mode: measure one channel folder against a specific ROI zip.
+
+    Used when the user points at a single channel folder + ROI zip
+    rather than a sample root.
+    """
+    if not channel_dir.is_dir():
+        raise NotADirectoryError(channel_dir)
+    if not roi_zip_path.is_file():
+        raise FileNotFoundError(roi_zip_path)
+
+    rois = roifile.roiread(str(roi_zip_path))
+    if isinstance(rois, roifile.ImagejRoi):
+        rois = [rois]
+    if not rois:
+        log.warning("Empty ROI zip %s", roi_zip_path)
+        return None
+
+    tif_files = _sorted_tifs(channel_dir)
+    n = min(len(tif_files), len(rois))
+    if not n:
+        log.warning("No TIFFs in %s or no ROIs — nothing to measure", channel_dir)
+        return None
+    if len(tif_files) != len(rois):
+        log.warning(
+            "%d TIFFs but %d ROIs — processing first %d",
+            len(tif_files), len(rois), n,
+        )
+
+    all_measurements: list[SliceMeasurement] = []
+    for i in range(n):
+        stack = _load_stack(tif_files[i])
+        measurements = measure_stack(
+            stack, rois[i], tif_files[i].stem, channel_name, tif_files[i].name,
+        )
+        all_measurements.extend(measurements)
+
+    if not all_measurements:
+        return None
+
+    out_dir = channel_dir.parent / "Results"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = out_dir / "signal_measurements.csv"
+
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(CSV_COLUMNS)
+        for m in all_measurements:
+            writer.writerow([
+                m.cell, m.channel, m.image_file, m.slice_index,
+                m.area, f"{m.mean:.4f}", f"{m.std:.4f}",
+                f"{m.min_val:.1f}", f"{m.max_val:.1f}",
+                f"{m.integrated_density:.2f}",
+            ])
+
+    log.info("Wrote %d rows to %s", len(all_measurements), csv_path)
+    return csv_path
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="measure_roi_signal",
         description="Measure per-slice signal intensity inside each cell's "
-        "ROI. Writes a single combined CSV per sample.",
+        "ROI. Writes a single combined CSV per sample.\n\n"
+        "Two modes:\n"
+        "  Auto-discovery: --input-dir points at a root folder; the script\n"
+        "    finds every subfolder with gfp/cy dirs + roi.zip.\n"
+        "  Direct: --input-dir points at a single channel folder (e.g.\n"
+        "    .../Background_Subtracted/cy) and --roi-zip is the full path\n"
+        "    to the ROI zip.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument(
         "--input-dir",
         type=Path,
         required=True,
-        help="Root folder to search for sample directories.",
+        help="Root folder to search for sample directories, OR a single "
+        "channel folder (e.g. .../Cropped/cy) when using --roi-zip "
+        "with a full path.",
     )
     p.add_argument(
         "--gfp-dirname", default="gfp",
@@ -268,7 +340,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--roi-zip", default="roi.zip",
-        help="ROI zip filename (default: roi.zip).",
+        help="ROI zip filename to look for inside each sample (default: "
+        "roi.zip). Can also be a full path to a specific zip file, in "
+        "which case --input-dir is treated as a single channel folder.",
     )
     p.add_argument(
         "--channels",
@@ -299,14 +373,42 @@ def main() -> None:
     if not root.is_dir():
         parser.error(f"--input-dir is not a directory: {root}")
 
+    roi_zip_arg = Path(args.roi_zip)
+
+    # Direct mode: --roi-zip is a full path to a specific zip file.
+    if roi_zip_arg.is_absolute() or roi_zip_arg.is_file():
+        roi_zip_path = roi_zip_arg.resolve()
+        if not roi_zip_path.is_file():
+            parser.error(f"ROI zip not found: {roi_zip_path}")
+
+        # Infer channel name from the folder name (e.g. "cy", "gfp").
+        channel_name = root.name
+        print(f"Direct mode: measuring {root}")
+        print(f"  ROI zip: {roi_zip_path}")
+        print(f"  Channel: {channel_name}")
+
+        csv_path = _measure_direct(root, roi_zip_path, channel_name)
+        if csv_path:
+            print(f"\nDone. Wrote {csv_path}")
+        else:
+            print("\nNo measurements produced.")
+        return
+
+    # Auto-discovery mode: --roi-zip is just a filename (e.g. "roi.zip").
+    roi_zip_name = args.roi_zip
     samples = discover_sample_folders(
-        root, args.gfp_dirname, args.cy_dirname, args.roi_zip,
+        root, args.gfp_dirname, args.cy_dirname, roi_zip_name,
     )
 
     if not samples:
         print(f"No sample folders found under {root}")
         print(f"(looking for folders with {args.gfp_dirname}/ or "
-              f"{args.cy_dirname}/ plus {args.roi_zip})")
+              f"{args.cy_dirname}/ plus {roi_zip_name})")
+        print()
+        print("Tip: you can also point --input-dir at a single channel "
+              "folder and pass --roi-zip as a full path:")
+        print(f"  python measure_roi_signal.py --input-dir /path/to/cy "
+              f"--roi-zip /path/to/roi.zip")
         sys.exit(1)
 
     print(f"Found {len(samples)} sample folder(s)")
@@ -320,7 +422,7 @@ def main() -> None:
             sample,
             gfp_dirname=args.gfp_dirname,
             cy_dirname=args.cy_dirname,
-            roi_zip_name=args.roi_zip,
+            roi_zip_name=roi_zip_name,
             channels=channels,
         )
         if csv_path:

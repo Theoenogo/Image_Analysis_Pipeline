@@ -42,6 +42,9 @@ subfolders and a `roi.zip` — works with `Cropped/` output from
 
 **Usage:**
 
+**Auto-discovery mode** — point at a root folder, the script finds all
+samples:
+
 ```bash
 python measure_roi_signal.py --input-dir /path/to/main_folder
 ```
@@ -52,10 +55,14 @@ To measure only one channel:
 python measure_roi_signal.py --input-dir /path/to/main_folder --channels cy
 ```
 
-To point at a specific subfolder (e.g. `Cropped/` directly):
+**Direct mode** — point at a single channel folder and give the full
+path to the ROI zip (useful when the ROI zip isn't in the same
+directory as the channel TIFFs):
 
 ```bash
-python measure_roi_signal.py --input-dir /path/to/sample/Cropped
+python measure_roi_signal.py \
+    --input-dir /path/to/Background_Subtracted/cy \
+    --roi-zip /path/to/Cropped/roi.zip
 ```
 
 **Common options:**
@@ -64,7 +71,7 @@ python measure_roi_signal.py --input-dir /path/to/sample/Cropped
 |------|---------|---------|
 | `--gfp-dirname` | `gfp` | GFP channel folder name |
 | `--cy-dirname` | `cy` | Cy channel folder name |
-| `--roi-zip` | `roi.zip` | ROI zip filename |
+| `--roi-zip` | `roi.zip` | ROI zip filename, or full path for direct mode |
 | `--channels` | both | Space-separated list of channel folders to measure |
 | `-v / --verbose` | off | Verbose logging |
 
