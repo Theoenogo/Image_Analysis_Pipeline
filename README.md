@@ -198,6 +198,21 @@ post-edit stages wouldn't be useful.
 
 ---
 
+## Extra Scripts (`extras/`)
+
+Standalone analysis scripts that are useful but not always part of the
+main pipeline. Each script is self-contained and can be run
+independently.
+
+- **`measure_roi_signal.py`** — measures per-slice signal intensity
+  (mean, std, min, max, integrated density) inside each cell's ROI.
+  Writes a single combined CSV per sample. Python port of the ImageJ
+  `Measure_ROI_Signal_Per_Slice.ijm` macro.
+
+See `extras/README.md` for full usage.
+
+---
+
 ## Adding New Tools
 
 When adding a new pipeline step:
