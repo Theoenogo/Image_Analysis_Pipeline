@@ -185,14 +185,16 @@ def _extract_number(stem: str) -> str | None:
     """Extract the numeric core from a filename stem for cross-folder pairing.
 
     Strips known channel prefixes (gfp, cy, cy5, 488, 647) and common
-    suffixes (_decon, _deconvolved) to get a matching key.
+    suffixes (_decon, _deconvolved) to get a matching key. Purely numeric
+    results are normalized to their integer value so ``"01"`` and ``"1"``
+    produce the same key — files with or without leading zeros match.
 
     Examples:
-        gfp01_decon  -> 01
-        cy01_decon   -> 01
+        gfp01_decon       -> 1
+        cy1_decon         -> 1
         gfp15_deconvolved -> 15
-        cy5_sample03 -> sample03
-        01           -> 01
+        cy5_sample03      -> sample03
+        01                -> 1
     """
     s = stem.lower()
     # Strip known channel prefixes.
@@ -208,7 +210,13 @@ def _extract_number(stem: str) -> str | None:
         if s.endswith(sfx):
             s = s[: -len(sfx)]
             break
-    return s if s else None
+    if not s:
+        return None
+    # Normalize purely numeric keys so "01" == "1".
+    try:
+        return str(int(s))
+    except ValueError:
+        return s
 
 
 def _pair_across_folders(
@@ -230,8 +238,14 @@ def _pair_across_folders(
         if key is not None:
             cy5_by_key[key] = p
 
+    def _sort_key(k: str) -> tuple[int, str]:
+        try:
+            return (int(k), k)
+        except ValueError:
+            return (10**9, k)
+
     pairs: list[ImagePair] = []
-    for key in sorted(gfp_by_key.keys()):
+    for key in sorted(gfp_by_key.keys(), key=_sort_key):
         if key in cy5_by_key:
             pairs.append(ImagePair(gfp_path=gfp_by_key[key], cy5_path=cy5_by_key[key]))
     return pairs

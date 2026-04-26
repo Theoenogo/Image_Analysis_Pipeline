@@ -21,9 +21,14 @@ Output:
 """
 
 import os
+import re
 import sys
 import csv
 import argparse
+import logging
+from pathlib import Path
+from typing import List, Optional, Union
+
 import numpy as np
 
 try:
@@ -31,6 +36,9 @@ try:
 except ImportError:
     print("Error: tifffile is required.  Install with:  pip install tifffile")
     sys.exit(1)
+
+
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -167,11 +175,18 @@ def get_num(filename, prefix):
         return s
 
 
+def _numeric_sort_key(name):
+    """Sort key: extract first digit run as int for natural ordering."""
+    m = re.search(r"(\d+)", name)
+    return (int(m.group(1)) if m else 10**9, name.lower())
+
+
 def get_files(folder, prefix):
-    """Get sorted list of TIFF files with given prefix."""
+    """Get numerically sorted list of TIFF files with given prefix."""
     return sorted([f for f in os.listdir(folder)
                    if f.lower().endswith(('.tif', '.tiff'))
-                   and f.lower().startswith(prefix.lower())])
+                   and f.lower().startswith(prefix.lower())],
+                  key=_numeric_sort_key)
 
 
 def load_stack(filepath):
@@ -197,44 +212,56 @@ def load_stack(filepath):
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Colocalization analysis: Pearson's r + thresholded Manders' M1/M2"
-    )
-    parser.add_argument(
-        "bg_sub_dir",
-        help="Path to Background_Subtracted folder (must contain gfp/ and cy/ subfolders)"
-    )
-    args = parser.parse_args()
+# ---------------------------------------------------------------------------
+# Library API — reusable for batch / combined pipeline runs
+# ---------------------------------------------------------------------------
 
-    root = args.bg_sub_dir
+
+def analyze_folder(
+    bg_sub_dir: Union[str, Path],
+    results_csv: Optional[Union[str, Path]] = None,
+    thresholds_csv: Optional[Union[str, Path]] = None,
+    verbose: bool = True,
+) -> dict:
+    """Run colocalization analysis on one ``Background_Subtracted/`` folder.
+
+    Walks ``bg_sub_dir/gfp/`` + ``bg_sub_dir/cy/``, pairs files by the
+    numeric suffix, computes per-slice IsoData thresholds, Pearson's r,
+    and thresholded Manders' M1/M2, and writes two CSVs into the same
+    folder (or at caller-specified paths).
+
+    Returns a dict summary with ``pairs_processed`` and ``slices_processed``.
+    """
+    root = str(bg_sub_dir)
     gfp_dir = os.path.join(root, "gfp")
     cy_dir = os.path.join(root, "cy")
 
     if not os.path.isdir(gfp_dir):
-        print("Error: GFP folder not found: {}".format(gfp_dir))
-        sys.exit(1)
+        raise FileNotFoundError("GFP folder not found: {}".format(gfp_dir))
     if not os.path.isdir(cy_dir):
-        print("Error: CY folder not found: {}".format(cy_dir))
-        sys.exit(1)
+        raise FileNotFoundError("CY folder not found: {}".format(cy_dir))
 
-    results_csv = os.path.join(root, "coloc_results.csv")
-    thresholds_csv = os.path.join(root, "thresholds_multislice.csv")
-
-    print("GFP folder: {}".format(gfp_dir))
-    print("CY folder:  {}".format(cy_dir))
-    print("Results:     {}".format(results_csv))
+    results_csv = str(results_csv) if results_csv else os.path.join(
+        root, "coloc_results.csv"
+    )
+    thresholds_csv = str(thresholds_csv) if thresholds_csv else os.path.join(
+        root, "thresholds_multislice.csv"
+    )
 
     gfp_files = get_files(gfp_dir, "gfp")
     cy_files = get_files(cy_dir, "cy")
-    print("Found {} GFP and {} CY files".format(len(gfp_files), len(cy_files)))
+
+    say = print if verbose else log.debug
+    say("GFP folder: {}".format(gfp_dir))
+    say("CY folder:  {}".format(cy_dir))
+    say("Results:     {}".format(results_csv))
+    say("Found {} GFP and {} CY files".format(len(gfp_files), len(cy_files)))
 
     # ---- CSV headers ----
     with open(results_csv, 'w', newline='') as f:
         csv.writer(f).writerow(["gfp_image", "cy_image", "slice",
                                  "gfp_threshold", "cy_threshold",
                                  "pearson", "mandersA", "mandersB"])
-
     with open(thresholds_csv, 'w', newline='') as f:
         csv.writer(f).writerow(["gfp_image", "cy_image", "slice",
                                  "gfp_threshold", "cy_threshold"])
@@ -247,16 +274,16 @@ def main():
         cy_file = next((f for f in cy_files if get_num(f, "cy") == gfp_num), None)
 
         if not cy_file:
-            print("No matching CY file for {}".format(gfp_file))
+            say("No matching CY file for {}".format(gfp_file))
             continue
 
-        print("\nProcessing: {} + {}".format(gfp_file, cy_file))
+        say("\nProcessing: {} + {}".format(gfp_file, cy_file))
 
         gfp_stack = load_stack(os.path.join(gfp_dir, gfp_file))
         cy_stack = load_stack(os.path.join(cy_dir, cy_file))
 
         nslices = min(gfp_stack.shape[0], cy_stack.shape[0])
-        print("  {} slices".format(nslices))
+        say("  {} slices".format(nslices))
 
         result_rows = []
         threshold_rows = []
@@ -272,9 +299,9 @@ def main():
             m1, m2 = compute_manders(gfp_slice, cy_slice, thr_g, thr_c)
 
             slice_num = s + 1
-            print("  Slice {:3d}: thr_g={:7.1f}  thr_c={:7.1f}  "
-                  "r={:.4f}  M1={:.4f}  M2={:.4f}".format(
-                      slice_num, thr_g, thr_c, pearson, m1, m2))
+            say("  Slice {:3d}: thr_g={:7.1f}  thr_c={:7.1f}  "
+                "r={:.4f}  M1={:.4f}  M2={:.4f}".format(
+                    slice_num, thr_g, thr_c, pearson, m1, m2))
 
             result_rows.append([gfp_file, cy_file, slice_num,
                                 "{:.2f}".format(thr_g), "{:.2f}".format(thr_c),
@@ -291,11 +318,70 @@ def main():
         total_slices += nslices
         total_pairs += 1
 
-    print("\n" + "=" * 50)
-    print("Complete!")
-    print("Processed {} image pairs, {} total slices".format(total_pairs, total_slices))
-    print("Results:     {}".format(results_csv))
-    print("Thresholds:  {}".format(thresholds_csv))
+    say("\n" + "=" * 50)
+    say("Complete!")
+    say("Processed {} image pairs, {} total slices".format(total_pairs, total_slices))
+    say("Results:     {}".format(results_csv))
+    say("Thresholds:  {}".format(thresholds_csv))
+
+    return {
+        "bg_sub_dir": root,
+        "results_csv": results_csv,
+        "thresholds_csv": thresholds_csv,
+        "pairs_processed": total_pairs,
+        "slices_processed": total_slices,
+    }
+
+
+def discover_bg_sub_folders(root: Union[str, Path]) -> List[Path]:
+    """Find every ``Background_Subtracted/`` folder under ``root`` that has
+    both ``gfp/`` and ``cy/`` subfolders — i.e. every folder ready for
+    colocalization analysis."""
+    root = Path(root)
+    if not root.is_dir():
+        raise NotADirectoryError(root)
+    found: List[Path] = []
+    for path in root.rglob("Background_Subtracted"):
+        if not path.is_dir():
+            continue
+        if not (path / "gfp").is_dir() or not (path / "cy").is_dir():
+            continue
+        found.append(path)
+    return sorted(found)
+
+
+def run_pipeline(root: Union[str, Path], verbose: bool = True) -> dict:
+    """Walk ``root`` for every ``Background_Subtracted/`` folder and
+    analyze each. Returns ``{folder: analysis_summary}``."""
+    folders = discover_bg_sub_folders(root)
+    results: dict = {}
+    for folder in folders:
+        if verbose:
+            print("\n>>> Analyzing {}".format(folder))
+        results[folder] = analyze_folder(folder, verbose=verbose)
+    return results
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Colocalization analysis: Pearson's r + thresholded Manders' M1/M2"
+    )
+    parser.add_argument(
+        "bg_sub_dir",
+        help="Path to Background_Subtracted folder (must contain gfp/ and cy/ subfolders)"
+    )
+    args = parser.parse_args()
+
+    try:
+        analyze_folder(args.bg_sub_dir)
+    except FileNotFoundError as err:
+        print("Error: {}".format(err))
+        sys.exit(1)
 
 
 if __name__ == "__main__":

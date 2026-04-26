@@ -1,7 +1,10 @@
 cellpose>=3.0
 numpy
+scipy
 tifffile
 scikit-image
 roifile
 matplotlib
 tqdm
+pyimagej>=1.4
+scyjava>=1.9

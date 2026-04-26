@@ -10,10 +10,12 @@ Tools should be run in the following order:
 
 | Step | Folder | Description |
 |------|--------|-------------|
-| 1 | *(coming soon)* | Pre-processing / image preparation |
-| 2 | `roi_drawing/` | Automated ROI detection around cells using Cellpose |
-| 3 | *(coming soon)* | Intermediate processing |
-| 4 | `manders_mcc/` | Colocalization analysis (Manders' coefficients + Pearson's) |
+| 1 | `preprocessing/` | Stack microscope TIFF slices, correct GFP XY offset, Richardson-Lucy deconvolution |
+| 2 | `roi_drawing/` | Automated ROI detection around cells using Cellpose (writes to `roi_original/`) |
+| 3 | *(manual)* ImageJ `Color_Merge_Automated_PreloadROIs_Adjust.ijm` | User refines ROIs and saves the edited set to `roi/` |
+| 4 | `roi_cropping/` | Crop each ROI's single-cell stack from the decon images and re-origin the ROI coords |
+| 5 | `background_subtraction/` | Per-cell background subtraction (mean-inside-ROI × multiplier, clamped) |
+| 6 | `manders_mcc/` | Colocalization analysis (Manders' coefficients + Pearson's) |
 
 ---
 
@@ -33,21 +35,60 @@ cd Image_Analysis_Pipeline
 ```
 
 **2. Create a virtual environment**
+
+macOS / Linux:
 ```bash
 python3.12 -m venv venv
 source venv/bin/activate
 ```
 
-**3. Install dependencies**
-```bash
-python3.12 -m pip install -r requirements.txt
+Windows (PowerShell):
+```powershell
+py -3.12 -m venv venv
+venv\Scripts\Activate.ps1
 ```
 
-> Activate the virtual environment (`source venv/bin/activate`) at the start of every session before running any scripts.
+Windows (Command Prompt):
+```cmd
+py -3.12 -m venv venv
+venv\Scripts\activate.bat
+```
+
+> If PowerShell blocks the activate script, run
+> `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once and retry.
+
+**3. Install dependencies**
+```bash
+python -m pip install -r requirements.txt
+```
+
+> Activate the virtual environment at the start of every session before
+> running any scripts (macOS/Linux: `source venv/bin/activate`,
+> Windows PowerShell: `venv\Scripts\Activate.ps1`).
 
 ---
 
 ## Tools
+
+### Preprocessing (`preprocessing/`)
+
+Stacks per-slice microscope TIFFs into multi-page stacks, applies a
+fixed XY offset to the GFP channel to correct for channel registration,
+and runs Richardson-Lucy deconvolution against user-supplied PSFs.
+This is the Python port of the original MATLAB preprocessing pipeline.
+
+**Run:**
+```bash
+cd preprocessing
+python preprocess.py \
+    --input-dir /path/to/main_folder \
+    --gfp-psf /path/to/gfp_psf.tif \
+    --cy-psf /path/to/cy_psf.tif
+```
+
+See `preprocessing/README.md` for full usage and options.
+
+---
 
 ### ROI Drawing (`roi_drawing/`)
 
@@ -62,6 +103,54 @@ python roi_detect.py
 ```
 
 See `roi_drawing/README.md` for full usage and options.
+
+---
+
+### Manual ROI editing (ImageJ — kept as-is)
+
+Between `roi_drawing/` and `roi_cropping/`, the user runs the ImageJ macro
+`Color_Merge_Automated_PreloadROIs_Adjust.ijm` (preserved in
+`roi_cropping/matlab_reference/`). It loads each image pair plus the
+auto-generated ROIs from `roi_original/` so the user can add, remove,
+or refine ROIs by hand, then saves the edited set to a sibling `roi/`
+folder. This is the only manual step in the pipeline.
+
+---
+
+### ROI Cropping (`roi_cropping/`)
+
+Reads the user-edited ROI zips and the decon stacks and produces one
+cropped single-cell stack per ROI in flat `Cropped/{gfp,cy}/` folders,
+with all pixels outside the ROI zeroed and the ROI re-origined to the
+crop-local frame. Replaces the old MATLAB
+`H_roi_duplicate_image_all_channels_Recursive.m` + ImageJ
+`ROI_Select_Duplicate_TIFF_Loop.ijm` two-step flow with a single pass.
+
+**Run:**
+```bash
+cd roi_cropping
+python roi_crop.py --input-dir /path/to/main_folder
+```
+
+See `roi_cropping/README.md` for full usage and options.
+
+---
+
+### Background Subtraction (`background_subtraction/`)
+
+For each cropped cell, measures the mean intensity inside the ROI on
+slice 0, multiplies by a user-set multiplier (default 1.25, clamped to
+`[100, 5000]`), and subtracts that constant from every Z slice. Writes
+to `Background_Subtracted/{gfp,cy}/`, which is what `manders_mcc/`
+reads. Python port of `Background_Subtraction_Tailored.ijm`.
+
+**Run:**
+```bash
+cd background_subtraction
+python bg_subtract.py --input-dir /path/to/main_folder
+```
+
+See `background_subtraction/README.md` for full usage and options.
 
 ---
 
@@ -80,6 +169,47 @@ python standalone_analysis.py
 ```
 
 See `manders_mcc/README.md` for full usage and options.
+
+---
+
+## Batch runner (`run_experiment.py`)
+
+A convenience wrapper that chains the three post-ImageJ-edit stages
+(`roi_cropping → background_subtraction → manders_mcc`) across every
+sample in an experiment. Use it when you've finished the manual ROI
+editing in Fiji and want to go from `<sample>/{gfp,cy,roi}/` all the
+way to final colocalization CSVs in one command.
+
+**Run:**
+```bash
+python run_experiment.py --input-dir /path/to/main_folder
+```
+
+The individual stage scripts (`roi_crop.py`, `bg_subtract.py`,
+`standalone_analysis.py`) are untouched and still usable on their own
+when you want to iterate on a single stage. Stages can also be skipped
+individually in the batch runner via `--skip-roi-cropping`,
+`--skip-background-subtraction`, `--skip-manders-mcc`.
+
+Preprocessing + ROI drawing are intentionally **not** bundled in here —
+both need per-experiment inputs (PSFs, Cellpose parameters), and the
+manual Fiji ROI edit sits between them, so chaining them with the
+post-edit stages wouldn't be useful.
+
+---
+
+## Extra Scripts (`extras/`)
+
+Standalone analysis scripts that are useful but not always part of the
+main pipeline. Each script is self-contained and can be run
+independently.
+
+- **`measure_roi_signal.py`** — measures per-slice signal intensity
+  (mean, std, min, max, integrated density) inside each cell's ROI.
+  Writes a single combined CSV per sample. Python port of the ImageJ
+  `Measure_ROI_Signal_Per_Slice.ijm` macro.
+
+See `extras/README.md` for full usage.
 
 ---
 
