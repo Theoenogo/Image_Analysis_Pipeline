@@ -87,16 +87,18 @@ def _read_slices(folder: Path) -> tuple[list[np.ndarray], list[Path]]:
         except Exception as err:
             log.warning("Skipping unreadable TIFF %s: %s", path, err)
             continue
-        # Some microscopes (e.g. EVOS) write single-plane images as OME-TIFFs
-        # that tifffile reads as (1, H, W).  Squeeze those to 2D so they are
-        # treated as normal per-slice files.
-        if arr.ndim == 3 and arr.shape[0] == 1:
+        # Some microscopes (e.g. EVOS) write single-plane images as OME-TIFFs.
+        # tifffile may read these as (N, H, W) — either because the file
+        # genuinely declares N frames in its OME metadata, or because missing
+        # frames are zero-padded (tifffile warning: "OME series is missing N
+        # frames").  In a per-slice folder every file is one Z-plane, so take
+        # the first frame and discard any padding.
+        if arr.ndim == 3:
             arr = arr[0]
-        # Skip genuine multi-page files accidentally present in the per-slice folder.
         if arr.ndim > 2:
             log.warning(
-                "Skipping %s: unexpected multi-page TIFF (ndim=%d) in per-slice folder",
-                path, arr.ndim,
+                "Skipping %s: unexpected array shape %s in per-slice folder",
+                path, arr.shape,
             )
             continue
         slices.append(arr)
