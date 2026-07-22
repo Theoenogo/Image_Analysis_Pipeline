@@ -302,14 +302,24 @@ def process_sample(
     gfp_dirname: str = "gfp",
     cy_dirname: str = "cy",
     roi_zip_name: str = "roi.zip",
+    roi_zip_path_override: Path | None = None,
 ) -> Path | None:
     """Run Golgi signal analysis for one sample folder.
 
+    Parameters
+    ----------
+    roi_zip_path_override:
+        Full path to the ROI zip when it lives outside ``sample_dir``
+        (direct mode).  Takes precedence over ``roi_zip_name``.
+
     Returns the path to the output CSV, or ``None`` if nothing was processed.
     """
-    roi_zip = sample_dir / roi_zip_name
+    if roi_zip_path_override is not None:
+        roi_zip = roi_zip_path_override
+    else:
+        roi_zip = sample_dir / roi_zip_name
     if not roi_zip.is_file():
-        log.warning("No %s in %s — skipping", roi_zip_name, sample_dir)
+        log.warning("No ROI zip found at %s — skipping", roi_zip)
         return None
 
     gfp_dir = sample_dir / gfp_dirname
@@ -464,6 +474,29 @@ def main() -> None:
     root = args.input_dir.resolve()
     if not root.is_dir():
         parser.error(f"--input-dir is not a directory: {root}")
+
+    roi_zip_arg = Path(args.roi_zip)
+
+    # Direct mode: --roi-zip is a full/resolvable path to a specific zip file.
+    # Treat --input-dir as the sample folder itself and copy the roi.zip there
+    # temporarily so process_sample can find it alongside gfp/ and cy/.
+    if roi_zip_arg.is_absolute() or roi_zip_arg.is_file():
+        roi_zip_path = roi_zip_arg.resolve()
+        if not roi_zip_path.is_file():
+            parser.error(f"ROI zip not found: {roi_zip_path}")
+        print(f"Direct mode: {root}")
+        print(f"  ROI zip:    {roi_zip_path}")
+        total = 0
+        csv_path = process_sample(
+            root,
+            gfp_dirname=args.gfp_dirname,
+            cy_dirname=args.cy_dirname,
+            roi_zip_path_override=roi_zip_path,
+        )
+        if csv_path:
+            total = 1
+        print(f"\nDone. Wrote {total} CSV file(s).")
+        return
 
     samples = discover_sample_folders(
         root, args.gfp_dirname, args.cy_dirname, args.roi_zip,
