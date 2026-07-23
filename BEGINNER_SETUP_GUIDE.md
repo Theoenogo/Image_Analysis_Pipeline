@@ -396,7 +396,7 @@ cd ..
 
 ### Step 3 — Manual ROI editing in ImageJ (the only manual step)
 
-Open Fiji/ImageJ, run the macro `Color_Merge_Automated_PreloadROIs_Adjust.ijm` (found in `roi_cropping/matlab_reference/`), and check/fix the cell outlines. Save the edited outlines to the `roi/` folder inside each sample. See your lab's ImageJ documentation for detailed instructions on this step.
+Open Fiji/ImageJ, run the macro `Color_Merge_Automated_PreloadROIs_Adjust.ijm` (found in `roi_cropping/`), and check/fix the cell outlines. Save the edited outlines to the `roi/` folder inside each sample. See your lab's ImageJ documentation for detailed instructions on this step.
 
 ---
 

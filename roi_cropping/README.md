@@ -4,8 +4,10 @@ Python port of the MATLAB ``H_roi_duplicate_image_all_channels_Recursive.m``
 plus the ImageJ ``ROI_Select_Duplicate_TIFF_Loop.ijm`` two-step flow,
 collapsed into a single pass.
 
-The original MATLAB/ImageJ scripts are preserved for reference in
-[`matlab_reference/`](./matlab_reference).
+The original MATLAB/ImageJ reference scripts are preserved in
+[`matlab_reference/`](./matlab_reference). The one macro still actually
+used in the pipeline, `Color_Merge_Automated_PreloadROIs_Adjust.ijm`
+(the manual ROI-editing step), lives directly in this folder instead.
 
 ## What it does
 

@@ -109,8 +109,8 @@ See `roi_drawing/README.md` for full usage and options.
 ### Manual ROI editing (ImageJ — kept as-is)
 
 Between `roi_drawing/` and `roi_cropping/`, the user runs the ImageJ macro
-`Color_Merge_Automated_PreloadROIs_Adjust.ijm` (preserved in
-`roi_cropping/matlab_reference/`). It loads each image pair plus the
+`Color_Merge_Automated_PreloadROIs_Adjust.ijm` (kept in
+`roi_cropping/`). It loads each image pair plus the
 auto-generated ROIs from `roi_original/` so the user can add, remove,
 or refine ROIs by hand, then saves the edited set to a sibling `roi/`
 folder. This is the only manual step in the pipeline.
