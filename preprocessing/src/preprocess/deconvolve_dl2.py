@@ -28,6 +28,24 @@ class DL2NotAvailableError(RuntimeError):
     """Raised when the DL2 engine can't be used (missing Fiji/plugin)."""
 
 
+_LAUNCHER_TO_APP_DIR_DEPTH = {
+    "imagej-macosx": 3,  # Fiji.app/Contents/MacOS/ImageJ-macosx
+    "imagej-linux64": 1,  # Fiji.app/ImageJ-linux64
+    "imagej-win64.exe": 1,  # Fiji.app/ImageJ-win64.exe
+}
+
+
+def _app_dir_from_launcher(path: Path) -> Path | None:
+    """If ``path`` is a Fiji launcher executable, return its Fiji.app directory."""
+    depth = _LAUNCHER_TO_APP_DIR_DEPTH.get(path.name.lower())
+    if depth is None:
+        return None
+    app_dir = path
+    for _ in range(depth):
+        app_dir = app_dir.parent
+    return app_dir
+
+
 def _resolve_fiji_dir(fiji_dir: Path | str | None) -> Path:
     """Find a Fiji.app directory, preferring an explicit argument, then env var."""
     candidates: list[Path] = []
@@ -39,6 +57,12 @@ def _resolve_fiji_dir(fiji_dir: Path | str | None) -> Path:
     for cand in candidates:
         if cand.is_dir():
             return cand.resolve()
+        if cand.is_file():
+            # Common mistake: pointed at the launcher exe (e.g.
+            # ImageJ-win64.exe) instead of the Fiji.app folder itself.
+            app_dir = _app_dir_from_launcher(cand)
+            if app_dir is not None and app_dir.is_dir():
+                return app_dir.resolve()
     raise DL2NotAvailableError(
         "No Fiji installation found for the DL2 engine.\n"
         "Either pass --fiji-dir /path/to/Fiji.app, set FIJI_DIR in your "
