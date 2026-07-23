@@ -15,6 +15,12 @@
 7. [Create a virtual environment](#7-create-a-virtual-environment)
 8. [Install the pipeline's dependencies](#8-install-the-pipelines-dependencies)
 9. [Running the pipeline — step by step](#9-running-the-pipeline--step-by-step)
+   - [Step 0 — EVOS data: split channels](#step-0--evos-data-only-split-channels-skip-if-using-a-different-microscope)
+   - [Step 1 — Preprocessing](#step-1--preprocessing)
+   - [Step 2 — ROI Drawing](#step-2--roi-drawing-automated-cell-detection)
+   - [Step 3 — Manual ROI editing in ImageJ](#step-3--manual-roi-editing-in-imagej-the-only-manual-step)
+   - [Steps 4–6 — Batch runner](#steps-46--batch-runner-crop--background-subtract--colocalization)
+   - [Extra scripts — optional analyses](#extra-scripts--optional-analyses)
 10. [Every time you come back: the daily checklist](#10-every-time-you-come-back-the-daily-checklist)
 11. [Troubleshooting common problems](#11-troubleshooting-common-problems)
 
@@ -314,6 +320,26 @@ Before running any step, make sure:
 
 ---
 
+### Step 0 — EVOS data only: split channels (skip if using a different microscope)
+
+If your images were acquired on an **EVOS microscope**, both the GFP and Cy5 images are saved together in a single folder rather than in separate `gfp/` and `cy/` folders. Run this script first to reorganize them into the format the pipeline expects. If your images came from a different microscope and already have separate `gfp1/`, `cy1/` etc. folders, skip this step entirely.
+
+From the main `Image_Analysis_Pipeline` folder:
+
+Mac:
+```
+python extras/split_channels.py /path/to/your/experiment_folder
+```
+
+Windows:
+```
+python extras\split_channels.py "C:\path\to\your\experiment_folder"
+```
+
+To preview what will happen without actually moving any files, add `--dry-run` to the end of the command. When you're satisfied, run it again without `--dry-run`.
+
+---
+
 ### Step 1 — Preprocessing
 
 This step takes the raw TIFF images from the microscope, stacks them, corrects alignment, and sharpens them (deconvolution).
@@ -405,6 +431,56 @@ The final results will appear as `.csv` files inside your data folder, which you
 
 ---
 
+### Extra scripts — optional analyses
+
+These scripts live in the `extras/` folder and can be run on their own when needed. They are not part of the standard pipeline but are useful for specific experiments.
+
+#### Golgi signal analysis (`extras/golgi_signal_analysis.py`)
+
+Use this to measure how much of your GFP signal is inside the Golgi (marked by Cy5) vs. outside it. The script:
+- Generates a Golgi mask from the Cy5 channel automatically (IsoData threshold within the cell outline)
+- Measures GFP intensity inside and outside the mask for every Z slice
+- Writes a CSV of results and saves mask images you can open in FIJI to verify the mask looks correct
+
+Run from the main `Image_Analysis_Pipeline` folder:
+
+Mac:
+```
+python extras/golgi_signal_analysis.py --input-dir /path/to/your/data
+```
+
+Windows:
+```
+python extras\golgi_signal_analysis.py --input-dir "C:\path\to\your\data"
+```
+
+If your `roi.zip` file is in a different folder from the images (e.g. in `Cropped/` but the images are in `Background_Subtracted/`), add `--roi-zip` with the full path to the zip file:
+
+Mac:
+```
+python extras/golgi_signal_analysis.py --input-dir /path/to/Background_Subtracted --roi-zip /path/to/Cropped/roi.zip
+```
+
+Results are written to `<your data folder>/Results/golgi_signal_analysis.csv`. The mask images go to `Results/masks/`.
+
+#### ROI signal measurement (`extras/measure_roi_signal.py`)
+
+Measures mean intensity, integrated density, area, min, max, and standard deviation inside each cell's ROI on every Z slice. Writes one combined CSV per sample.
+
+Mac:
+```
+python extras/measure_roi_signal.py --input-dir /path/to/your/data
+```
+
+Windows:
+```
+python extras\measure_roi_signal.py --input-dir "C:\path\to\your\data"
+```
+
+See `extras/README.md` for more options.
+
+---
+
 ## 10. Every time you come back: the daily checklist
 
 Every time you open a new terminal to work on the pipeline, you need to:
@@ -428,6 +504,12 @@ Every time you open a new terminal to work on the pipeline, you need to:
    ```
 
 4. **Check that `(venv)` appears** at the start of the prompt. If it does, you are ready to run scripts.
+
+5. *(Optional)* **Pull the latest updates from GitHub** in case the pipeline has been updated since you last used it:
+   ```
+   git pull origin main
+   ```
+   If nothing has changed, it will say "Already up to date." — that is fine.
 
 That is it. You do not need to reinstall anything — just activate and go.
 
