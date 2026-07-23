@@ -204,10 +204,22 @@ Standalone analysis scripts that are useful but not always part of the
 main pipeline. Each script is self-contained and can be run
 independently.
 
+- **`split_channels.py`** — reorganizes EVOS microscope acquisition
+  folders where both channels are mixed together. Moves `d1` (Cy5) and
+  `d3` (GFP) TIFFs into `cy{N}/` and `gfp{N}/` subfolders expected by
+  the rest of the pipeline, then removes the original acquisition
+  folder. Run this before preprocessing on EVOS data.
+
 - **`measure_roi_signal.py`** — measures per-slice signal intensity
   (mean, std, min, max, integrated density) inside each cell's ROI.
   Writes a single combined CSV per sample. Python port of the ImageJ
   `Measure_ROI_Signal_Per_Slice.ijm` macro.
+
+- **`golgi_signal_analysis.py`** — generates a Golgi mask from the
+  Cy5 channel (IsoData threshold within the cell ROI) and quantifies
+  how much GFP signal falls inside vs. outside the Golgi. Writes a CSV
+  of per-slice metrics, a binary mask TIFF, and an ImageJ ROI zip per
+  cell for visual verification in FIJI.
 
 See `extras/README.md` for full usage.
 

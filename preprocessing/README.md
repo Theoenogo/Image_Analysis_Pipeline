@@ -29,6 +29,19 @@ In a single command, this replaces MATLAB scripts A → F:
 
 The `Deconvoluted/` tree is what `roi_drawing/` reads from next.
 
+## EVOS microscope images
+
+If your images were acquired on an EVOS microscope, both channels are
+saved together in a single timestamped folder rather than in separate
+`gfp{N}/` and `cy{N}/` subfolders. Run `extras/split_channels.py`
+first to reorganize them into the layout below before running this
+script.
+
+EVOS images are saved as OME-TIFFs. The stacking step handles these
+correctly — it reads only the first frame from any file that `tifffile`
+reports as multi-frame (a common side-effect of OME metadata declaring
+extra frames that were never written).
+
 ## Input layout
 
 The simple 2-level layout (mirrors the MATLAB pipeline):
