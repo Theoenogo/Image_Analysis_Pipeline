@@ -285,6 +285,49 @@ python preprocess.py \
     --skip-cleanup --skip-stacking --skip-consolidate
 ```
 
+## Standalone single-folder deconvolution
+
+If you just want to deconvolve one folder of TIFF stacks against one PSF —
+no stacking, no consolidation, no gfp/cy pairing — use
+`deconvolve_folder.py` instead of the full pipeline:
+
+```bash
+python deconvolve_folder.py \
+    --input-dir  /path/to/some_folder \
+    --psf        /path/to/psf.tif \
+    --output-dir /path/to/output_folder \
+    --fiji-dir   /Applications/Fiji.app
+```
+
+Every `*.tif` directly inside `--input-dir` (non-recursive) is deconvolved
+and written to `<output-dir>/<name>_decon.tif`. If `--output-dir` is
+omitted, outputs go to `<input-dir>_decon` next to the input folder.
+
+It accepts the same `--iterations`, `--engine`, `--fiji-dir`,
+`--torch-device`, `--no-crop-psf`, and `--psf-crop-margin` options as
+`preprocess.py` (see [Common options](#common-options) above) — it's the
+same deconvolution code, just pointed at a single flat folder instead of
+the pipeline's `<sample>/<channel_group>/` layout.
+
+Pass `--jobs N` (default `1`) to deconvolve multiple images concurrently
+instead of one at a time:
+
+```bash
+python deconvolve_folder.py \
+    --input-dir  /path/to/some_folder \
+    --psf        /path/to/psf.tif \
+    --output-dir /path/to/output_folder \
+    --fiji-dir   /Applications/Fiji.app \
+    --jobs 3
+```
+
+For `--engine dl2`, each job launches its own Fiji process (JVM + GUI
+window), so `--jobs` genuinely runs several deconvolutions side by side —
+2-4 is a reasonable starting point depending on CPU cores and RAM. For
+`--engine scipy`/`torch` it uses threads instead, which mainly helps if
+the computation isn't already saturating all CPU cores (or the GPU, for
+`torch`).
+
 ## Algorithm details
 
 Richardson-Lucy implemented as standard multiplicative updates:

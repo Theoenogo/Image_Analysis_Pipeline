@@ -7,10 +7,11 @@ this backend launches Fiji as a normal macOS/Linux application via
 ``subprocess``, hands it a tiny ImageJ macro that calls DL2, and picks
 up the output TIFF when Fiji exits.
 
-Each ``deconvolve_file`` call spawns one Fiji process. Channel-level
-parallelism (GFP + Cy) is handled by the caller launching two
-``deconvolve_file`` calls concurrently — they run as separate OS
-processes with no shared JVM state.
+Each ``deconvolve_file`` call spawns one Fiji process. Concurrent callers
+(e.g. --jobs > 1, or channel-level GFP + Cy parallelism) launch several
+``deconvolve_file`` calls at once; each passes ``-port0`` to force Fiji's
+single-instance check off, so every launch gets its own independent JVM
+rather than being silently forwarded to an already-running instance.
 """
 
 from __future__ import annotations
@@ -19,7 +20,10 @@ import logging
 import os
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
+
+import tifffile
 
 log = logging.getLogger(__name__)
 
@@ -149,10 +153,44 @@ def deconvolve_file(
     # DL2 off we poll for the expected output TIFF (up to poll_seconds)
     # and only quit once it exists. The outer subprocess timeout still
     # bounds total wall-clock time.
-    poll_seconds = 580  # a bit under subprocess timeout (600s) so we
-                        # can log a clean timeout before Python kills us.
-    img_title = "dl2_image"
-    psf_title = "dl2_psf"
+    # NB: File.exists() goes true as soon as ImageJ creates the file, not
+    # once the multi-page TIFF is fully written — quitting immediately on
+    # that signal can cut off the IFD chain that links the later slices,
+    # producing a file that still opens (first page intact) but silently
+    # has fewer slices than the source stack. A "wait until file size
+    # stops changing" heuristic was tried here first but isn't reliable
+    # under concurrent load (--jobs > 1): several Fiji processes
+    # contending for CPU/disk can stall an in-progress write for multiple
+    # seconds, which reads as "stable" and triggers a premature quit
+    # before the writer resumes and finishes. So instead we reopen the
+    # output file after it appears and check its actual slice count
+    # against the source stack's, retrying (not just waiting) until they
+    # match or we time out — a real content check instead of a
+    # filesystem proxy.
+    poll_seconds = 580  # generous upper bound for DL2 itself to finish and
+                        # the output file to appear.
+    verify_seconds = 120  # extra budget for the slice-count re-verification
+                          # loop, on top of poll_seconds.
+    # The outer subprocess timeout must cover both phases (with margin for
+    # macro/JVM overhead) — poll_seconds alone was fine when quitting was
+    # triggered by File.exists(), but the verify loop below can now run
+    # well past that before the macro calls Quit.
+    subprocess_timeout = poll_seconds + verify_seconds + 30
+    # NB: ImageJ/Fiji has a single-instance mode: launching the binary
+    # while another instance is already running doesn't start a new JVM,
+    # it forwards the command to the existing instance over a local
+    # socket. When deconvolve_channel/deconvolve_folder run several
+    # deconvolve_file() calls concurrently (--jobs > 1), that collapses
+    # multiple "independent" subprocess.run() calls onto one shared JVM —
+    # and since every call used the same hardcoded image titles, one
+    # job's macro could rename/close/overwrite another job's in-flight
+    # image mid-run, producing a complete but wrong (shorter) result.
+    # '-port0' disables that single-instance check so each launch is a
+    # genuinely separate JVM, and unique per-call titles below are a
+    # second layer of protection against title collisions.
+    run_id = uuid.uuid4().hex[:8]
+    img_title = f"dl2_image_{run_id}"
+    psf_title = f"dl2_psf_{run_id}"
     expected_output = output_path.parent / f"{output_path.stem}.tif"
     m_input = _macro_path(input_path)
     m_psf = _macro_path(psf_path)
@@ -162,6 +200,7 @@ def deconvolve_file(
         f'print("DL2 starting: {input_path.name}");\n'
         f'open("{m_input}");\n'
         f'rename("{img_title}");\n'
+        f'origSlices = nSlices;\n'
         f'open("{m_psf}");\n'
         f'rename("{psf_title}");\n'
         f'outFile = "{m_outfile}";\n'
@@ -178,7 +217,29 @@ def deconvolve_file(
         f'    waited = waited + 1;\n'
         f'}}\n'
         f'if (File.exists(outFile)) {{\n'
-        f'    print("DL2 output appeared after " + waited + "s: " + outFile);\n'
+        f'    print("DL2 output appeared after " + waited + "s: " + outFile + " (expecting " + origSlices + " slice(s))");\n'
+        f'    verified = false;\n'
+        f'    verifyWaited = 0;\n'
+        f'    gotSlices = -1;\n'
+        f'    while (!verified && verifyWaited < {verify_seconds}) {{\n'
+        f'        wait(1000);\n'
+        f'        verifyWaited = verifyWaited + 1;\n'
+        f'        if (File.exists(outFile)) {{\n'
+        f'            open(outFile);\n'
+        f'            checkTitle = "dl2_check_{run_id}";\n'
+        f'            rename(checkTitle);\n'
+        f'            gotSlices = nSlices;\n'
+        f'            close();\n'
+        f'            if (gotSlices == origSlices) {{\n'
+        f'                verified = true;\n'
+        f'            }}\n'
+        f'        }}\n'
+        f'    }}\n'
+        f'    if (verified) {{\n'
+        f'        print("DL2 output verified with " + gotSlices + " slice(s) after " + verifyWaited + "s");\n'
+        f'    }} else {{\n'
+        f'        print("DL2 output still has " + gotSlices + "/" + origSlices + " slice(s) after " + verifyWaited + "s, giving up");\n'
+        f'    }}\n'
         f'}} else {{\n'
         f'    print("DL2 output never appeared, gave up after " + waited + "s");\n'
         f'}}\n'
@@ -200,13 +261,16 @@ def deconvolve_file(
         # AWT is available; on macOS a subprocess spawned from a GUI
         # terminal session inherits display access, so a brief Fiji
         # window appears per deconvolution but the macro quits on its own.
-        cmd = [str(launcher), "-macro", macro_path]
+        # -port0 disables ImageJ's single-instance socket check (see NB
+        # above) so concurrent deconvolve_file() calls never collapse
+        # onto a shared JVM.
+        cmd = [str(launcher), "-port0", "-macro", macro_path]
 
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=subprocess_timeout,
         )
 
         if result.stdout:
@@ -221,13 +285,39 @@ def deconvolve_file(
         except OSError:
             pass
 
+    def _verify_page_count(out_file: Path) -> None:
+        # Belt-and-braces on top of the in-macro slice-count verification:
+        # compare page counts directly from Python (cheap — reads only the
+        # IFD chain, not pixel data) so a still-short file fails loudly
+        # here instead of silently passing through as if it succeeded.
+        try:
+            with tifffile.TiffFile(str(input_path)) as tf_in:
+                in_pages = len(tf_in.pages)
+            with tifffile.TiffFile(str(out_file)) as tf_out:
+                out_pages = len(tf_out.pages)
+        except Exception as e:
+            raise RuntimeError(
+                f"DL2 output at {out_file} could not be verified "
+                f"(failed to read page count): {e}"
+            ) from e
+        if out_pages != in_pages:
+            raise RuntimeError(
+                f"DL2 output at {out_file} has {out_pages} slice(s), "
+                f"expected {in_pages} (from {input_path}). The output "
+                "file is likely truncated — see 'DL2 output still has "
+                "X/Y slice(s)' in the Fiji log above for the in-macro "
+                "verification outcome."
+            )
+
     if output_path.is_file():
+        _verify_page_count(output_path)
         return output_path
 
     # DL2 may have saved without extension match — search for the stem
     alt = output_path.parent / f"{output_path.stem}.tif"
     if alt.is_file() and alt != output_path:
         alt.rename(output_path)
+        _verify_page_count(output_path)
         return output_path
 
     recent = sorted(
