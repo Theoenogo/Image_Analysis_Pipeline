@@ -271,3 +271,47 @@ python remove_body.py --input-dir /path/to/parent_dir
 
 Works on macOS, Linux, and Windows. All dependencies are in the
 repo-root `requirements.txt`.
+
+---
+
+### `rename_rfp_to_cy.py` — Treat a GFP/RFP dataset as GFP/Cy5
+
+`roi_drawing/`, `roi_cropping/`, `background_subtraction/`, and
+`manders_mcc/` only recognize channel folders/files named `gfp`/`cy`
+(or `cy5`) — none of that downstream math is fluorophore-specific, it's
+pixel-intensity thresholding, segmentation, and correlation applied to
+whichever two channels get loaded. The only genuinely RFP-specific step
+in the pipeline is the chromatic XY-offset correction in
+`preprocessing/preprocess.py` (`--gfp-offset 3 -1` for GFP/RFP), which
+happens upstream of everything this script touches.
+
+So once deconvolution is done, renaming `rfp` to `cy` — both the folder
+name and the leading `rfp` on every file inside it — lets every
+downstream stage treat a GFP/RFP dataset exactly like GFP/Cy5, no code
+changes required. Only matches folders literally named `rfp` (not
+per-slice folders like `rfp1/`, which are consumed earlier by the
+stacking step and never reach these tools).
+
+Note the renamed dataset's CSV columns and QC plot titles will still say
+"Cy5"/"cy5_mean" even though the data is actually RFP — that's just a
+label baked into `roi_drawing`'s code, not a computation issue. Worth
+noting in your own experiment records.
+
+**Usage:**
+
+```bash
+python rename_rfp_to_cy.py --input-dir /path/to/main_folder
+```
+
+Preview what would be renamed without touching the filesystem:
+
+```bash
+python rename_rfp_to_cy.py --input-dir /path/to/main_folder --dry-run
+```
+
+**Options:**
+
+| Flag | Purpose |
+|------|---------|
+| `--dry-run` | Print what would be renamed without moving/renaming anything |
+| `-v / --verbose` | Verbose logging |
