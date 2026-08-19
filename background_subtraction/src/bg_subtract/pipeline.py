@@ -54,6 +54,22 @@ def _sorted_tifs(folder: Path) -> list[Path]:
     )
 
 
+def _sorted_roi_files(folder: Path) -> list[Path]:
+    """Sorted ``.roi``/``.zip`` files in a per-image ROI folder (e.g. ``roi/``)."""
+    return sorted(
+        [p for p in folder.iterdir() if p.suffix.lower() in (".roi", ".zip")],
+        key=lambda p: _numeric_key(p.name),
+    )
+
+
+def _load_rois_from_file(path: Path) -> list[roifile.ImagejRoi]:
+    """Load one ROI file (single ``.roi`` or multi-ROI ``.zip``) as a list."""
+    rois = roifile.roiread(str(path))
+    if isinstance(rois, roifile.ImagejRoi):
+        rois = [rois]
+    return list(rois)
+
+
 def _load_stack(path: Path) -> np.ndarray:
     arr = tifffile.imread(str(path))
     if arr.ndim == 2:
@@ -92,15 +108,30 @@ def _roi_mask_for_image(roi: roifile.ImagejRoi, image_hw: tuple[int, int]) -> np
     return mask
 
 
+def _roi_mask_union(
+    rois: list[roifile.ImagejRoi], image_hw: tuple[int, int]
+) -> np.ndarray:
+    """Union of one or more ROIs into a single (h, w) boolean mask.
+
+    A per-image ROI *file* (as opposed to the single project-wide
+    ``roi.zip``) can itself contain more than one polygon; all of them
+    count toward the same cell's mask.
+    """
+    mask = np.zeros(image_hw, dtype=bool)
+    for roi in rois:
+        mask |= _roi_mask_for_image(roi, image_hw)
+    return mask
+
+
 def _compute_per_slice_subtract_values(
     stack: np.ndarray,
-    roi: roifile.ImagejRoi,
+    mask: np.ndarray,
     multiplier: float,
     *,
     floor: float = 100.0,
     ceiling: float = 5000.0,
 ) -> np.ndarray:
-    """Per-slice subtraction value: mean inside ROI on each slice * multiplier, clamped.
+    """Per-slice subtraction value: mean inside ``mask`` on each slice * multiplier, clamped.
 
     Returns a 1D array of length ``stack.shape[0]`` (one value per Z slice).
 
@@ -110,7 +141,6 @@ def _compute_per_slice_subtract_values(
     along Z) far better, and reduces to the macro's behavior on
     single-slice images.
     """
-    mask = _roi_mask_for_image(roi, stack.shape[1:])
     if not mask.any():
         return np.full(stack.shape[0], floor, dtype=np.float32)
     means = stack[:, mask].mean(axis=1)
@@ -153,12 +183,20 @@ def subtract_sample_folder(
     gfp_dirname: str = "gfp",
     cy_dirname: str = "cy",
     roi_zip_name: str = "roi.zip",
+    roi_dirname: str = "roi",
     gfp_multiplier: float = 1.25,
     cy_multiplier: float = 1.25,
     floor: float = 100.0,
     ceiling: float = 5000.0,
 ) -> SampleOutputs:
-    """Run bg-subtract for one ``Cropped/`` folder.
+    """Run bg-subtract for one ``Cropped/``-shaped folder (gfp/, cy/, ROI source).
+
+    The ROI source can be either a single ``roi_zip_name`` file (one ROI
+    per image, matched by index — the original convention) or a
+    ``roi_dirname`` folder with one ROI file per image (``.roi`` or
+    ``.zip``, matched positionally by filename number — e.g. the output
+    of ``extras/remove_body.py``). The zip file takes precedence if both
+    are present.
 
     The output goes to a sibling ``Background_Subtracted/`` (matching the
     ImageJ macro's "shared parent" logic).
@@ -167,13 +205,12 @@ def subtract_sample_folder(
     gfp_dir = cropped_root / gfp_dirname
     cy_dir = cropped_root / cy_dirname
     roi_zip = cropped_root / roi_zip_name
+    roi_dir = cropped_root / roi_dirname
 
     if not gfp_dir.is_dir():
         raise NotADirectoryError(gfp_dir)
     if not cy_dir.is_dir():
         raise NotADirectoryError(cy_dir)
-    if not roi_zip.is_file():
-        raise FileNotFoundError(roi_zip)
 
     gfp_files = _sorted_tifs(gfp_dir)
     cy_files = _sorted_tifs(cy_dir)
@@ -186,13 +223,29 @@ def subtract_sample_folder(
         log.info("%s: no images to process", cropped_root)
         return SampleOutputs([], [])
 
-    rois = roifile.roiread(str(roi_zip))
-    if isinstance(rois, roifile.ImagejRoi):
-        rois = [rois]
-    if len(rois) < len(gfp_files):
-        raise ValueError(
-            f"Not enough ROIs in {roi_zip}: rois={len(rois)}, "
-            f"images={len(gfp_files)}"
+    rois: list[roifile.ImagejRoi] | None = None
+    roi_files: list[Path] | None = None
+    if roi_zip.is_file():
+        rois = roifile.roiread(str(roi_zip))
+        if isinstance(rois, roifile.ImagejRoi):
+            rois = [rois]
+        if len(rois) < len(gfp_files):
+            raise ValueError(
+                f"Not enough ROIs in {roi_zip}: rois={len(rois)}, "
+                f"images={len(gfp_files)}"
+            )
+    elif roi_dir.is_dir():
+        roi_files = _sorted_roi_files(roi_dir)
+        if len(roi_files) < len(gfp_files):
+            raise ValueError(
+                f"Not enough ROI files in {roi_dir}: rois={len(roi_files)}, "
+                f"images={len(gfp_files)}"
+            )
+    else:
+        raise FileNotFoundError(
+            f"Neither {roi_zip} nor {roi_dir}/ found — need one ROI per "
+            f"image as either a single {roi_zip_name} or a {roi_dirname}/ "
+            "folder of per-image ROI files."
         )
 
     out_root = cropped_root.parent / "Background_Subtracted"
@@ -204,15 +257,19 @@ def subtract_sample_folder(
     out_gfp: list[Path] = []
     out_cy: list[Path] = []
     for i, (gfp_path, cy_path) in enumerate(zip(gfp_files, cy_files)):
-        roi = rois[i]
         gfp_stack = _load_stack(gfp_path)
         cy_stack = _load_stack(cy_path)
+        hw = gfp_stack.shape[1:]
+        if rois is not None:
+            mask = _roi_mask_for_image(rois[i], hw)
+        else:
+            mask = _roi_mask_union(_load_rois_from_file(roi_files[i]), hw)  # type: ignore[index]
 
         gfp_sub = _compute_per_slice_subtract_values(
-            gfp_stack, roi, gfp_multiplier, floor=floor, ceiling=ceiling,
+            gfp_stack, mask, gfp_multiplier, floor=floor, ceiling=ceiling,
         )
         cy_sub = _compute_per_slice_subtract_values(
-            cy_stack, roi, cy_multiplier, floor=floor, ceiling=ceiling,
+            cy_stack, mask, cy_multiplier, floor=floor, ceiling=ceiling,
         )
         log.info(
             "[%s] pair %d (%s / %s): gfp_sub_per_slice=[%s], cy_sub_per_slice=[%s]",
@@ -234,8 +291,18 @@ def subtract_sample_folder(
     return SampleOutputs(out_gfp, out_cy)
 
 
-def discover_cropped_folders(root: Path) -> list[Path]:
-    """Find every ``Cropped/`` folder under ``root`` that has gfp/, cy/, roi.zip."""
+def discover_cropped_folders(
+    root: Path,
+    *,
+    roi_zip_name: str = "roi.zip",
+    roi_dirname: str = "roi",
+) -> list[Path]:
+    """Find every ``Cropped/`` folder under ``root`` that has gfp/, cy/, and an ROI source.
+
+    The ROI source can be either a single ``roi_zip_name`` file or a
+    ``roi_dirname/`` folder of per-image ROI files (see
+    ``subtract_sample_folder``).
+    """
     root = Path(root)
     found: list[Path] = []
     for path in root.rglob("Cropped"):
@@ -243,7 +310,7 @@ def discover_cropped_folders(root: Path) -> list[Path]:
             continue
         if not (path / "gfp").is_dir() or not (path / "cy").is_dir():
             continue
-        if not (path / "roi.zip").is_file():
+        if not (path / roi_zip_name).is_file() and not (path / roi_dirname).is_dir():
             continue
         # Skip output folders if we ever nest.
         if "Background_Subtracted" in path.parts:
@@ -255,6 +322,8 @@ def discover_cropped_folders(root: Path) -> list[Path]:
 def run_pipeline(
     input_dir: Path,
     *,
+    roi_zip_name: str = "roi.zip",
+    roi_dirname: str = "roi",
     gfp_multiplier: float = 1.25,
     cy_multiplier: float = 1.25,
     floor: float = 100.0,
@@ -265,7 +334,9 @@ def run_pipeline(
     if not input_dir.is_dir():
         raise NotADirectoryError(input_dir)
 
-    cropped = discover_cropped_folders(input_dir)
+    cropped = discover_cropped_folders(
+        input_dir, roi_zip_name=roi_zip_name, roi_dirname=roi_dirname,
+    )
     if not cropped:
         log.warning("No Cropped/ folders found under %s", input_dir)
         return {}
@@ -275,6 +346,8 @@ def run_pipeline(
         log.info("=== Background-subtracting: %s ===", cropped_root)
         results[cropped_root] = subtract_sample_folder(
             cropped_root,
+            roi_zip_name=roi_zip_name,
+            roi_dirname=roi_dirname,
             gfp_multiplier=gfp_multiplier,
             cy_multiplier=cy_multiplier,
             floor=floor,

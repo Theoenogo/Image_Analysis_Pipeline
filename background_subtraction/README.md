@@ -64,10 +64,41 @@ python bg_subtract.py --input-dir /path/to/main_folder
 
 The walker finds every `Cropped/` folder anywhere under `--input-dir`.
 
+### Direct mode — one specific folder
+
+If you want to background-subtract a single folder that isn't part of
+the `roi_cropping/` walk (e.g. output from `extras/remove_body.py`),
+use `--direct`. It treats `--input-dir` as the sample folder itself
+instead of searching for `Cropped/` subfolders:
+
+```bash
+python bg_subtract.py --input-dir /path/to/some_folder --direct
+```
+
+`some_folder` must directly contain `gfp/`, `cy/`, and one of:
+
+- a single `roi.zip` (one ROI per image, matched by index) — the
+  original convention, or
+- a `roi/` folder with one ROI file per image (`.roi` or `.zip`,
+  matched positionally by the numeric part of the filename) — e.g.
+  `extras/remove_body.py`'s `roi/` input. If a per-image file contains
+  more than one ROI, they're unioned into a single mask.
+
+`roi.zip` takes precedence if both are present. Output goes to a
+sibling `Background_Subtracted/` folder next to `some_folder`, same as
+normal mode.
+
+The `roi/`-folder convention is also recognized automatically during
+the regular recursive `Cropped/` walk (no `--direct` needed) — it's a
+second accepted ROI source, not a replacement for `roi.zip`.
+
 ### Common options
 
 | Flag | Default | Purpose |
 |------|---------|---------|
+| `--direct` | off | Treat `--input-dir` as the sample folder itself instead of walking for `Cropped/` subfolders. |
+| `--roi-zip` | `roi.zip` | ROI zip filename to look for inside each sample. |
+| `--roi-dirname` | `roi` | Fallback ROI folder name (one `.roi`/`.zip` per image) if `--roi-zip` isn't found. |
 | `--gfp-multiplier` | `1.25` | Multiplier on the GFP per-cell mean. Matches the ImageJ macro default. |
 | `--cy-multiplier` | `1.25` | Multiplier on the Cy per-cell mean. |
 | `--floor` | `100` | Lower clamp on the subtraction value. |
@@ -85,7 +116,6 @@ that are at least 25% brighter than the cell average — which is what
 The clamp (`[100, 5000]`) prevents pathological cases (very dim or very
 bright cells) from producing extreme subtractions. Both the clamp and
 the multiplier match the ImageJ macro defaults verbatim.
-
 ## Parameter provenance
 
 | Parameter | ImageJ source | This port |

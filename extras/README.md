@@ -226,5 +226,48 @@ python golgi_signal_analysis.py \
 | `--roi-zip` | `roi.zip` | ROI zip filename, or full path for direct mode |
 | `-v / --verbose` | off | Verbose logging |
 
+### `remove_body.py` — Erase a drawn ROI from paired GFP/Cy stacks
+
+Zeroes out the pixels inside each image's ROI (e.g. a cell body outline),
+on every Z slice of both channels — useful for isolating signal *outside*
+a region, such as background or neurite signal once the cell body is
+removed.
+
+**Input:** a parent folder containing `gfp/`, `cy/`, and `roi/`
+subfolders, where `roi/` has one ImageJ ROI `.zip` per image (e.g.
+`01.zip`, `02.zip`, ...). Files across all three folders are paired
+positionally after sorting by the numeric part of their filename — this
+matches the numbering already used by this project's ROI-drawing output
+(e.g. `roi_original/01.zip` aligned 1:1 with sequentially-renumbered
+channel stacks).
+
+**Output** (written to `<parent_dir>/Body_Removed/`):
+
+```
+Body_Removed/
+    gfp/    gfp01.tif  gfp02.tif  ...
+    cy/     cy01.tif   cy02.tif   ...
+```
+
+Erased pixels are set to `0`; everything outside the ROI is left
+untouched. If a ROI zip contains more than one polygon, all of them are
+unioned into a single erased region.
+
+**Usage:**
+
+```bash
+python remove_body.py --input-dir /path/to/parent_dir
+```
+
+**Common options:**
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--gfp-dirname` | `gfp` | GFP channel folder name |
+| `--cy-dirname` | `cy` | Cy channel folder name |
+| `--roi-dirname` | `roi` | ROI folder name (one `.zip` per image) |
+| `--output-dirname` | `Body_Removed` | Output folder name, written under `--input-dir` |
+| `-v / --verbose` | off | Verbose logging |
+
 Works on macOS, Linux, and Windows. All dependencies are in the
 repo-root `requirements.txt`.

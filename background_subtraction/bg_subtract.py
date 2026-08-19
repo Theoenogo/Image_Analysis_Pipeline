@@ -31,6 +31,7 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from bg_subtract import run_pipeline  # noqa: E402
+from bg_subtract.pipeline import subtract_sample_folder  # noqa: E402
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -45,7 +46,28 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--input-dir",
         type=Path,
         required=True,
-        help="Folder to walk recursively for Cropped/ subfolders.",
+        help="Folder to walk recursively for Cropped/ subfolders. In "
+        "--direct mode, this is instead the single folder to process "
+        "(must directly contain gfp/, cy/, and an ROI source).",
+    )
+    p.add_argument(
+        "--direct",
+        action="store_true",
+        help="Treat --input-dir as the sample folder itself instead of "
+        "walking for Cropped/ subfolders — for running background "
+        "subtraction on one specific folder (e.g. output from "
+        "extras/remove_body.py) that isn't named 'Cropped'.",
+    )
+    p.add_argument(
+        "--roi-zip", default="roi.zip",
+        help="ROI zip filename to look for inside each sample (default: "
+        "roi.zip) — one ROI per image, matched by index.",
+    )
+    p.add_argument(
+        "--roi-dirname", default="roi",
+        help="Fallback ROI folder name if --roi-zip isn't found (default: "
+        "roi) — one .roi/.zip file per image, matched positionally by "
+        "filename number (e.g. extras/remove_body.py's roi/ input).",
     )
     p.add_argument("--gfp-multiplier", type=float, default=1.25,
                    help="Multiplier on the GFP per-cell mean (default: 1.25, "
@@ -67,8 +89,29 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    if args.direct:
+        sample_dir = args.input_dir.resolve()
+        if not sample_dir.is_dir():
+            print(f"--input-dir is not a directory: {sample_dir}", file=sys.stderr)
+            return 1
+        print(f"Direct mode: {sample_dir}")
+        outs = subtract_sample_folder(
+            sample_dir,
+            roi_zip_name=args.roi_zip,
+            roi_dirname=args.roi_dirname,
+            gfp_multiplier=args.gfp_multiplier,
+            cy_multiplier=args.cy_multiplier,
+            floor=args.floor,
+            ceiling=args.ceiling,
+        )
+        out_root = sample_dir.parent / "Background_Subtracted"
+        print(f"\nDone. Background-subtracted {len(outs.gfp)} pair(s) -> {out_root}")
+        return 0
+
     results = run_pipeline(
         args.input_dir,
+        roi_zip_name=args.roi_zip,
+        roi_dirname=args.roi_dirname,
         gfp_multiplier=args.gfp_multiplier,
         cy_multiplier=args.cy_multiplier,
         floor=args.floor,
