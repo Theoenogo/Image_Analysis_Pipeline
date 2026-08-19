@@ -325,6 +325,7 @@ def deconvolve_channel(
     psf_path: Path,
     channel_group: str,
     config: DeconvolutionConfig,
+    max_workers: int = 1,
 ) -> list[Path]:
     """Deconvolve every stack in ``<decon_folder>/<sample>/<channel_group>/*.tif``.
 
@@ -348,6 +349,18 @@ def deconvolve_channel(
         Folder name to match, e.g. ``"gfp"`` or ``"cy"``.
     config
         Algorithm parameters (iterations, engine, device).
+    max_workers
+        Number of images in *this channel* to deconvolve concurrently.
+        ``1`` (the default) is sequential, matching the original behavior.
+        For ``engine="dl2"`` each concurrent worker launches its own Fiji
+        subprocess; ``deconvolve_file()`` in ``deconvolve_dl2.py`` already
+        guards concurrent DL2 calls against the IFD-truncation race (unique
+        image titles, ``-port0``, in-macro slice-count verification, and a
+        Python-side page-count check that raises if a result is still
+        short) — this function relies on those guards rather than
+        duplicating them, so raising ``max_workers`` here is exactly as
+        safe as ``deconvolve_folder.py --jobs``, which uses the same
+        underlying call.
     """
     decon_folder = Path(decon_folder)
     psf_path = Path(psf_path)
@@ -364,10 +377,9 @@ def deconvolve_channel(
         log.info("No %s stacks to deconvolve under %s", channel_group, decon_folder)
         return []
 
-    log.info("Found %d %s stack(s) to deconvolve (engine=%s)",
-             len(jobs), channel_group, config.engine)
-
-    outputs: list[Path] = []
+    jobs_n = max(1, int(max_workers))
+    log.info("Found %d %s stack(s) to deconvolve (engine=%s, jobs=%d)",
+             len(jobs), channel_group, config.engine, jobs_n)
 
     # --- PSF auto-crop (benefits all engines) ---
     effective_psf_path = psf_path
@@ -388,28 +400,49 @@ def deconvolve_channel(
             if config.engine != "dl2":
                 cropped_psf_arr = raw_psf
 
-    try:
+    python_psf: np.ndarray | None = None
+    if config.engine != "dl2":
+        python_psf = cropped_psf_arr if cropped_psf_arr is not None else _load_tiff_stack(psf_path)
+        log.info("Loaded PSF %s with shape %s", psf_path, python_psf.shape)
+
+    def _run_one(input_path: Path, output_path: Path) -> Path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         if config.engine == "dl2":
             from .deconvolve_dl2 import deconvolve_file as _dl2_deconvolve_file
-            for input_path, output_path in jobs:
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                log.info("Deconvolving (DL2) %s", input_path)
-                _dl2_deconvolve_file(
-                    input_path, output_path, effective_psf_path,
-                    num_iter=config.num_iter,
-                    fiji_dir=config.fiji_dir,
-                )
-                outputs.append(output_path)
-                log.info("Wrote %s", output_path)
+            log.info("Deconvolving (DL2) %s", input_path)
+            _dl2_deconvolve_file(
+                input_path, output_path, effective_psf_path,
+                num_iter=config.num_iter,
+                fiji_dir=config.fiji_dir,
+            )
         else:
-            psf = cropped_psf_arr if cropped_psf_arr is not None else _load_tiff_stack(psf_path)
-            log.info("Loaded PSF %s with shape %s", psf_path, psf.shape)
+            log.info("Deconvolving (%s) %s", config.engine, input_path)
+            _deconvolve_file_python(input_path, output_path, python_psf, config)
+        log.info("Wrote %s", output_path)
+        return output_path
+
+    outputs: list[Path] = []
+    try:
+        if jobs_n == 1:
             for input_path, output_path in jobs:
-                log.info("Deconvolving (%s) %s", config.engine, input_path)
-                output_path.parent.mkdir(parents=True, exist_ok=True)
-                _deconvolve_file_python(input_path, output_path, psf, config)
-                outputs.append(output_path)
-                log.info("Wrote %s", output_path)
+                outputs.append(_run_one(input_path, output_path))
+        else:
+            log.info(
+                "Running %d %s job(s) with up to %d concurrent worker(s)",
+                len(jobs), channel_group, jobs_n,
+            )
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            with ThreadPoolExecutor(max_workers=jobs_n) as pool:
+                futures = {
+                    pool.submit(_run_one, input_path, output_path): output_path
+                    for input_path, output_path in jobs
+                }
+                # future.result() re-raises inside the main thread, so a
+                # single truncated/failed job fails the whole run loudly
+                # instead of silently dropping from the output list.
+                for future in as_completed(futures):
+                    future.result()
+            outputs = [output_path for _, output_path in jobs]
     finally:
         if cropped_psf_tmp is not None:
             try:

@@ -10,17 +10,32 @@ Runs all preprocessing steps end-to-end:
 Individual stages can be skipped with the ``--skip-*`` flags (useful for
 re-running just the deconvolution after tweaking PSFs, for example).
 
+Pass ``--jobs N`` to deconvolve multiple images within each channel
+concurrently (default: 1, sequential) — the same concurrency model as
+``deconvolve_folder.py --jobs``. Combines multiplicatively with
+channel-level concurrency (channels run concurrently by default too; pass
+``--sequential-channels`` to disable that separately).
+
 Input layout expected::
 
     <input-dir>/
         sampleA/
             gfp1/           ← single-slice TIFFs from the scope
-            cy1/
-            rfp1/           (optional; ignored unless stacked separately)
+            cy1/            (GFP/Cy experiments)
+            rfp1/           (GFP/RFP experiments)
         sampleB/
             gfp2/
             cy2/
         ...
+
+A sample normally pairs GFP with Cy *or* RFP, not both — pass ``--cy-psf``
+and/or ``--rfp-psf`` depending on which second channel this dataset uses.
+Both are stacked opportunistically; only channels with a PSF supplied are
+deconvolved.
+
+**GFP XY offset**: the chromatic registration shift depends on which
+channel GFP is paired with. Default ``--gfp-offset`` (``5 -2``) is
+calibrated for GFP/Cy5. For GFP/RFP, pass ``--gfp-offset -3 1`` explicitly.
 
 Output layout produced (matches the original MATLAB pipeline)::
 
@@ -29,15 +44,17 @@ Output layout produced (matches the original MATLAB pipeline)::
             sampleA/
                 gfp/gfp1.tif      ← stacked, GFP XY-shifted
                 cy/cy1.tif        ← stacked, no shift
+                rfp/rfp1.tif      ← stacked, no shift (if present)
             sampleB/...
             Deconvoluted/
                 sampleA/
                     gfp/gfp1_decon.tif
                     cy/cy1_decon.tif
+                    rfp/rfp1_decon.tif
                 sampleB/...
 
 Point ``roi_drawing/`` at each ``Deconvoluted/<sample>/`` folder to run
-ROI detection on that sample's paired gfp/cy stacks.
+ROI detection on that sample's paired gfp/cy (or gfp/rfp) stacks.
 """
 
 from __future__ import annotations
@@ -85,8 +102,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--cy-psf",
         type=Path,
-        help="Measured PSF TIFF for the Cy channel. Required unless "
-        "--skip-deconvolution is set.",
+        help="Measured PSF TIFF for the Cy channel. At least one of "
+        "--cy-psf / --rfp-psf is required unless --skip-deconvolution is set.",
+    )
+    p.add_argument(
+        "--rfp-psf",
+        type=Path,
+        help="Measured PSF TIFF for the RFP channel. At least one of "
+        "--cy-psf / --rfp-psf is required unless --skip-deconvolution is set.",
     )
     p.add_argument(
         "--iterations",
@@ -101,7 +124,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         metavar=("X", "Y"),
         default=list(DEFAULT_GFP_OFFSET),
         help=f"XY pixel offset applied to every GFP slice "
-        f"(default: {DEFAULT_GFP_OFFSET[0]} {DEFAULT_GFP_OFFSET[1]}). "
+        f"(default: {DEFAULT_GFP_OFFSET[0]} {DEFAULT_GFP_OFFSET[1]}, "
+        "calibrated for GFP/Cy5). For GFP/RFP pass '-3 1' instead. "
         "Use '0 0' to disable.",
     )
     p.add_argument(
@@ -145,8 +169,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--sequential-channels",
         action="store_true",
-        help="Deconvolve GFP then Cy sequentially. By default they run "
-        "concurrently (one thread or process per channel).",
+        help="Deconvolve channels one at a time instead of concurrently "
+        "(one thread per channel by default).",
+    )
+    p.add_argument(
+        "--jobs",
+        "-j",
+        type=int,
+        default=1,
+        help="Number of images WITHIN each channel to deconvolve "
+        "concurrently (default: 1, sequential) — same concurrency model as "
+        "deconvolve_folder.py --jobs. For --engine dl2 each job launches "
+        "its own Fiji process; 2-4 is often a reasonable ceiling depending "
+        "on CPU cores and RAM. This is independent of channel-level "
+        "concurrency (--sequential-channels): with the default settings "
+        "and --jobs 3 on a GFP/RFP run, up to 2 channels x 3 jobs = 6 Fiji "
+        "processes can run at once, so lower --jobs or pass "
+        "--sequential-channels on memory-constrained machines.",
     )
     p.add_argument(
         "--skip-cleanup",
@@ -192,13 +231,24 @@ def main() -> None:
         parser.error(f"--input-dir is not a directory: {main_folder}")
 
     if not args.skip_deconvolution:
-        if args.gfp_psf is None or args.cy_psf is None:
+        if args.gfp_psf is None:
+            parser.error("--gfp-psf is required unless --skip-deconvolution is set.")
+        if args.cy_psf is None and args.rfp_psf is None:
             parser.error(
-                "--gfp-psf and --cy-psf are required unless --skip-deconvolution is set."
+                "At least one of --cy-psf / --rfp-psf is required unless "
+                "--skip-deconvolution is set."
             )
-        for psf_path, label in ((args.gfp_psf, "GFP"), (args.cy_psf, "Cy")):
+        psfs_to_check = [(args.gfp_psf, "GFP")]
+        if args.cy_psf is not None:
+            psfs_to_check.append((args.cy_psf, "Cy"))
+        if args.rfp_psf is not None:
+            psfs_to_check.append((args.rfp_psf, "RFP"))
+        for psf_path, label in psfs_to_check:
             if not psf_path.is_file():
                 parser.error(f"{label} PSF not found: {psf_path}")
+
+    if args.jobs < 1:
+        parser.error("--jobs must be >= 1")
 
     xy_offset = (int(args.gfp_offset[0]), int(args.gfp_offset[1]))
 
@@ -233,17 +283,23 @@ def main() -> None:
             main_folder, channel_prefix="cy", decon_group="cy", xy_offset=None,
         )
         print(f"    Wrote {len(cy_stacks)} Cy stack(s).\n")
+
+        print(">>> Step 4: Stacking RFP slices (no offset) -> <sample>/Decon/rfp/")
+        rfp_stacks = stack_channel_folders(
+            main_folder, channel_prefix="rfp", decon_group="rfp", xy_offset=None,
+        )
+        print(f"    Wrote {len(rfp_stacks)} RFP stack(s).\n")
     else:
-        print(">>> Steps 2 & 3: SKIPPED (--skip-stacking)\n")
+        print(">>> Steps 2-4: SKIPPED (--skip-stacking)\n")
 
     # 3. Consolidate
     if not args.skip_consolidate:
-        print(f">>> Step 4: Consolidating per-sample Decon/ into "
+        print(f">>> Step 5: Consolidating per-sample Decon/ into "
               f"{main_folder / 'Decon'}/")
         moved = consolidate_decon_folders(main_folder)
         print(f"    Consolidated {len(moved)} sample folder(s).\n")
     else:
-        print(">>> Step 4: SKIPPED (--skip-consolidate)\n")
+        print(">>> Step 5: SKIPPED (--skip-consolidate)\n")
 
     # 4. Deconvolution
     if not args.skip_deconvolution:
@@ -262,43 +318,54 @@ def main() -> None:
                 "Did you skip stacking or consolidate?"
             )
 
+        # Channels to deconvolve: GFP always, Cy/RFP whichever have a PSF.
+        channels = [("GFP", "gfp", args.gfp_psf)]
+        if args.cy_psf is not None:
+            channels.append(("Cy", "cy", args.cy_psf))
+        if args.rfp_psf is not None:
+            channels.append(("RFP", "rfp", args.rfp_psf))
+
         engine_label = config.engine
         if config.engine == "torch":
             engine_label = f"torch/{config.torch_device}"
-        print(f">>> Step 5: Deconvolution (Richardson-Lucy, "
-              f"{config.num_iter} iter, engine={engine_label})")
-        print(f"    GFP PSF: {args.gfp_psf}")
-        print(f"    Cy  PSF: {args.cy_psf}")
+        print(f">>> Step 6: Deconvolution (Richardson-Lucy, "
+              f"{config.num_iter} iter, engine={engine_label}, jobs={args.jobs})")
+        for label, _group, psf_path in channels:
+            print(f"    {label} PSF: {psf_path}")
 
-        # Parallelize GFP + Cy5 unless the user asked for sequential, or
-        # the engine is torch on a single GPU (where they'd just serialize
-        # on the device anyway).
+        # Parallelize channels unless the user asked for sequential, or the
+        # engine is torch on a single GPU (where they'd just serialize on
+        # the device anyway). Independently, --jobs controls how many
+        # images WITHIN each channel run concurrently, so the two combine
+        # multiplicatively — see the --jobs help text.
         parallel = not args.sequential_channels and config.engine != "torch"
 
+        outputs: dict[str, list[Path]] = {}
         if parallel:
             from concurrent.futures import ThreadPoolExecutor
-            print(f"    Running GFP + Cy concurrently (engine={config.engine}).")
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                gfp_fut = pool.submit(
-                    deconvolve_channel, decon_folder, args.gfp_psf, "gfp", config,
-                )
-                cy_fut = pool.submit(
-                    deconvolve_channel, decon_folder, args.cy_psf, "cy", config,
-                )
-                gfp_out = gfp_fut.result()
-                cy_out = cy_fut.result()
+            channel_names = " + ".join(label for label, _g, _p in channels)
+            print(f"    Running {channel_names} concurrently (engine={config.engine}), "
+                  f"{args.jobs} job(s) per channel.")
+            with ThreadPoolExecutor(max_workers=len(channels)) as pool:
+                futures = {
+                    label: pool.submit(
+                        deconvolve_channel, decon_folder, psf_path, group, config,
+                        args.jobs,
+                    )
+                    for label, group, psf_path in channels
+                }
+                outputs = {label: fut.result() for label, fut in futures.items()}
         else:
-            gfp_out = deconvolve_channel(
-                decon_folder, args.gfp_psf, "gfp", config,
-            )
-            cy_out = deconvolve_channel(
-                decon_folder, args.cy_psf, "cy", config,
-            )
+            outputs = {
+                label: deconvolve_channel(decon_folder, psf_path, group, config, args.jobs)
+                for label, group, psf_path in channels
+            }
 
-        print(f"    Wrote {len(gfp_out)} GFP deconvoluted stack(s).")
-        print(f"    Wrote {len(cy_out)} Cy deconvoluted stack(s).\n")
+        for label, _group, _psf_path in channels:
+            print(f"    Wrote {len(outputs[label])} {label} deconvoluted stack(s).")
+        print()
     else:
-        print(">>> Step 5: SKIPPED (--skip-deconvolution)\n")
+        print(">>> Step 6: SKIPPED (--skip-deconvolution)\n")
 
     print("=== Done ===")
     if not args.skip_deconvolution:
