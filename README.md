@@ -151,6 +151,11 @@ cd background_subtraction
 python bg_subtract.py --input-dir /path/to/main_folder
 ```
 
+A strong, spatially-concentrated bright signal in the ROI (e.g. Golgi/TGN)
+inflates the mean and over-subtracts everywhere else; `bg_subtract_percentile.py`
+is a drop-in alternative that uses a low ROI percentile instead — see
+`background_subtraction/README.md` for when and how to use it.
+
 See `background_subtraction/README.md` for full usage and options.
 
 ---

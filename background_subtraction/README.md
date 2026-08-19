@@ -116,6 +116,64 @@ that are at least 25% brighter than the cell average — which is what
 The clamp (`[100, 5000]`) prevents pathological cases (very dim or very
 bright cells) from producing extreme subtractions. Both the clamp and
 the multiplier match the ImageJ macro defaults verbatim.
+
+**Caveat:** the in-ROI mean is only a good stand-in for "diffuse
+background" when the ROI doesn't contain a strong, spatially-concentrated
+bright region. If it does (e.g. a bright Golgi/TGN signal in a
+proinsulin or insulin channel), that region pulls the mean up, inflating
+the subtraction constant — which then gets applied to the *whole* image,
+disproportionately erasing real, dimmer signal far from that region
+(puncta out in cell processes / near the plasma membrane). See
+`bg_subtract_percentile.py` below for a fix.
+
+## Alternative: percentile-based subtraction (`bg_subtract_percentile.py`)
+
+Same algorithm shape — one flat constant per slice, clamped, applied to
+the whole image — but computed from a **low percentile of the ROI**
+(default: 10th) instead of the mean. A low percentile reflects the
+typical dim background pixel regardless of how bright a small region
+elsewhere in the ROI gets, since that region only ever occupies a
+minority of the ROI's pixels — so it doesn't have the Golgi-inflation
+problem above. Deliberately the smallest change that fixes it, not a new
+algorithm: same inputs, same output layout, same `--gfp-multiplier` /
+`--cy-multiplier` / `--floor` / `--ceiling` defaults as `bg_subtract.py`.
+
+Writes to a *different* output folder
+(`Background_Subtracted_Percentile/` by default) so it can sit alongside
+`bg_subtract.py`'s own output for direct comparison — running it never
+touches or overwrites the original method's results.
+
+```bash
+python bg_subtract_percentile.py --input-dir /path/to/main_folder --percentile 10
+```
+
+Accepts the same `--direct`, `--roi-zip`, `--roi-dirname` options as
+`bg_subtract.py` (see [Common options](#common-options)), plus:
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--percentile` | `10` | ROI percentile used in place of the mean. Lower = more conservative (subtracts less); higher moves back toward mean-like behavior and re-exposes the original problem as it approaches ~50. |
+| `--output-dirname` | `Background_Subtracted_Percentile` | Output folder name, written as a sibling of `Cropped/`. |
+
+Validated on real data (INS-1 endogenous proinsulin/insulin + CGA
+datasets): with the defaults above, Golgi detection in a downstream
+spot-counting step was essentially unchanged (~1% area difference vs.
+the mean-based method), while the fraction of peripheral pixels zeroed
+by the subtraction dropped sharply at distance from the Golgi (100–150px
+band: 94% → 41%; 150–250px band: 92% → 54%) — i.e. real distal signal
+that the mean-based method was erasing is preserved. `--percentile 10`
+is a reasonable starting point, not a rigorously optimized value — tune
+it for your own images the same way you'd tune any other threshold in
+this pipeline: compare a few cells against the mean-based output at
+matched display scaling before trusting a full batch run.
+
+(An earlier spatially-local rolling-ball approach was tried and dropped:
+it correctly decouples a bright Golgi from the rest of the image, but a
+rolling ball can't remove a genuinely flat, uniform background — there's
+no local trend for it to roll under — so it left far-field noise almost
+entirely unsuppressed. The percentile fix above solves the actual
+problem without that failure mode.)
+
 ## Parameter provenance
 
 | Parameter | ImageJ source | This port |
