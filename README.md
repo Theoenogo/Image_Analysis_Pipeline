@@ -16,6 +16,7 @@ Tools should be run in the following order:
 | 4 | `roi_cropping/` | Crop each ROI's single-cell stack from the decon images and re-origin the ROI coords |
 | 5 | `background_subtraction/` | Per-cell background subtraction (mean-inside-ROI × multiplier, clamped) |
 | 6 | `manders_mcc/` | Colocalization analysis (Manders' coefficients + Pearson's) |
+| 6b | `spot_counting/` | Per-spot alternative to step 6: counts granule puncta in one channel and scores yes/no overlap in the other |
 
 ---
 
@@ -169,6 +170,31 @@ python standalone_analysis.py
 ```
 
 See `manders_mcc/README.md` for full usage and options.
+
+---
+
+### Spot counting (`spot_counting/`)
+
+A per-spot alternative to `manders_mcc/`. Instead of correlating intensities
+across the whole image, it detects discrete granule puncta in one channel,
+scores yes/no overlap against the other channel, and reports a percent overlap
+per cell — automating a protocol otherwise done by hand.
+
+The non-punctate perinuclear Golgi signal is excluded automatically by
+connected-component area, and every cell gets a QC overlay plus an ImageJ ROI
+set so the automated calls can be checked against manual counts in Fiji.
+
+`--marker` is required and selects the spatial rule (`proinsulin` keeps
+juxta-Golgi puncta; `insulin` counts only puncta out in the processes and at
+the membrane). Run once per marker.
+
+**Run:**
+```bash
+cd spot_counting
+python spot_count.py --input-dir /path/to/data --marker proinsulin
+```
+
+See `spot_counting/README.md` for full usage, tuning and validation steps.
 
 ---
 
