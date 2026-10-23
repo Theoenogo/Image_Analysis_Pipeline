@@ -11,7 +11,9 @@ Tools should be run in the following order:
 | Step | Folder | Description |
 |------|--------|-------------|
 | 1 | `preprocessing/` | Stack microscope TIFF slices, correct GFP XY offset, Richardson-Lucy deconvolution |
-| 2 | `roi_drawing/` | Automated ROI detection around cells using Cellpose (writes to `roi_original/`) |
+| 2 | `roi_drawing/` | Automated ROI detection around cells using Cellpose (writes to `roi_original/`) 
+<img width="2235" height="629" alt="15_decon_overlay" src="https://github.com/user-attachments/assets/00fdb891-390b-43df-92ae-c1742bc2d8c3" />
+Auto-generated QC output from the ROI step. Widefield GFP and Cy5 channels after deconvolution, with Cellpose-detected cell ROIs. Green outlines mark cells called positive in both channels; red outlines mark cells called negative.|
 | 3 | *(manual)* ImageJ `Color_Merge_Automated_PreloadROIs_Adjust.ijm` | User refines ROIs and saves the edited set to `roi/` |
 | 4 | `roi_cropping/` | Crop each ROI's single-cell stack from the decon images and re-origin the ROI coords |
 | 5 | `background_subtraction/` | Per-cell background subtraction (mean-inside-ROI × multiplier, clamped) |
@@ -104,9 +106,6 @@ python roi_detect.py
 ```
 
 See `roi_drawing/README.md` for full usage and options.
-
-<img width="2235" height="629" alt="15_decon_overlay" src="https://github.com/user-attachments/assets/00fdb891-390b-43df-92ae-c1742bc2d8c3" />
-Auto-generated QC output from the ROI step. Widefield GFP and Cy5 channels after deconvolution, with Cellpose-detected cell ROIs. Green outlines mark cells called positive in both channels; red outlines mark cells called negative.
 
 ---
 
