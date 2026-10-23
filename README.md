@@ -106,6 +106,7 @@ python roi_detect.py
 See `roi_drawing/README.md` for full usage and options.
 
 <img width="2235" height="629" alt="15_decon_overlay" src="https://github.com/user-attachments/assets/00fdb891-390b-43df-92ae-c1742bc2d8c3" />
+Auto-generated QC output from the ROI step. Widefield GFP and Cy5 channels after deconvolution, with Cellpose-detected cell ROIs. Green outlines mark cells called positive in both channels; red outlines mark cells called negative.
 
 ---
 
