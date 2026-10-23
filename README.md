@@ -264,8 +264,4 @@ When adding a new pipeline step:
 3. Update the master requirements file: `python3.12 -m pip freeze > requirements.txt`
 4. Update the Pipeline Overview table in this README
 
----
 
-## Contributing
-
-This is a private lab repository. Contact the repository owner before making changes.
