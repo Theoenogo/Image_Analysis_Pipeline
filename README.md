@@ -105,6 +105,8 @@ python roi_detect.py
 
 See `roi_drawing/README.md` for full usage and options.
 
+<img width="2235" height="629" alt="15_decon_overlay" src="https://github.com/user-attachments/assets/00fdb891-390b-43df-92ae-c1742bc2d8c3" />
+
 ---
 
 ### Manual ROI editing (ImageJ — kept as-is)
