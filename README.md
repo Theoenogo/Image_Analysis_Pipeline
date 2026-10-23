@@ -264,7 +264,7 @@ See `extras/README.md` for full usage.
 When adding a new pipeline step:
 1. Create a new subfolder (e.g. `preprocessing/`)
 2. Add any new dependencies with `python3.12 -m pip install <package>`
-3. Update the master requirements file: `python3.12 -m pip freeze > requirements.txt`
+3. Add the new tool's packages to `requirements.txt` with pinned versions (for example `cellpose==3.1.0`)
 4. Update the Pipeline Overview table in this README
 
 
